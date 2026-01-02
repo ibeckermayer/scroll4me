@@ -1,58 +1,59 @@
 package config
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"github.com/BurntSushi/toml"
 )
 
 // Config holds all application configuration
 type Config struct {
-	Version   int             `json:"version"`
-	Interests InterestsConfig `json:"interests"`
-	Scraping  ScrapingConfig  `json:"scraping"`
-	Analysis  AnalysisConfig  `json:"analysis"`
-	Digest    DigestConfig    `json:"digest"`
-	Email     EmailConfig     `json:"email"`
+	Version   int             `toml:"version"`
+	Interests InterestsConfig `toml:"interests"`
+	Scraping  ScrapingConfig  `toml:"scraping"`
+	Analysis  AnalysisConfig  `toml:"analysis"`
+	Digest    DigestConfig    `toml:"digest"`
+	Email     EmailConfig     `toml:"email"`
 }
 
 type InterestsConfig struct {
-	Keywords         []string `json:"keywords"`
-	PriorityAccounts []string `json:"priority_accounts"`
-	MutedAccounts    []string `json:"muted_accounts"`
-	MutedKeywords    []string `json:"muted_keywords"`
+	Keywords         []string `toml:"keywords"`
+	PriorityAccounts []string `toml:"priority_accounts"`
+	MutedAccounts    []string `toml:"muted_accounts"`
+	MutedKeywords    []string `toml:"muted_keywords"`
 }
 
 type ScrapingConfig struct {
-	PostsPerScrape      int  `json:"posts_per_scrape"`
-	ScrapeIntervalHours int  `json:"scrape_interval_hours"`
-	Headless            bool `json:"headless"`
+	PostsPerScrape      int  `toml:"posts_per_scrape"`
+	ScrapeIntervalHours int  `toml:"scrape_interval_hours"`
+	Headless            bool `toml:"headless"`
 }
 
 type AnalysisConfig struct {
-	LLMProvider        string  `json:"llm_provider"`
-	APIKey             string  `json:"api_key"`
-	Model              string  `json:"model"`
-	RelevanceThreshold float64 `json:"relevance_threshold"`
-	BatchSize          int     `json:"batch_size"`
+	LLMProvider        string  `toml:"llm_provider"`
+	APIKey             string  `toml:"api_key"`
+	Model              string  `toml:"model"`
+	RelevanceThreshold float64 `toml:"relevance_threshold"`
+	BatchSize          int     `toml:"batch_size"`
 }
 
 type DigestConfig struct {
-	MorningTime       string `json:"morning_time"`
-	EveningTime       string `json:"evening_time"`
-	Timezone          string `json:"timezone"`
-	MaxPostsPerDigest int    `json:"max_posts_per_digest"`
-	IncludeContext    bool   `json:"include_context"`
+	MorningTime       string `toml:"morning_time"`
+	EveningTime       string `toml:"evening_time"`
+	Timezone          string `toml:"timezone"`
+	MaxPostsPerDigest int    `toml:"max_posts_per_digest"`
+	IncludeContext    bool   `toml:"include_context"`
 }
 
 type EmailConfig struct {
-	Provider string `json:"provider"`
-	SMTPHost string `json:"smtp_host"`
-	SMTPPort int    `json:"smtp_port"`
-	SMTPUser string `json:"smtp_user"`
-	SMTPPass string `json:"smtp_pass"`
-	FromAddr string `json:"from_address"`
-	ToAddr   string `json:"to_address"`
+	Provider string `toml:"provider"`
+	SMTPHost string `toml:"smtp_host"`
+	SMTPPort int    `toml:"smtp_port"`
+	SMTPUser string `toml:"smtp_user"`
+	SMTPPass string `toml:"smtp_pass"`
+	FromAddr string `toml:"from_address"`
+	ToAddr   string `toml:"to_address"`
 }
 
 // Default returns a Config with sensible defaults
@@ -105,7 +106,7 @@ func ConfigPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "config.json"), nil
+	return filepath.Join(dir, "config.toml"), nil
 }
 
 // Load reads config from disk
@@ -115,13 +116,8 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
 	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	if _, err := toml.DecodeFile(path, &cfg); err != nil {
 		return nil, err
 	}
 
@@ -144,10 +140,12 @@ func (c *Config) Save() error {
 		return err
 	}
 
-	data, err := json.MarshalIndent(c, "", "  ")
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}
+	defer f.Close()
 
-	return os.WriteFile(path, data, 0600)
+	encoder := toml.NewEncoder(f)
+	return encoder.Encode(c)
 }

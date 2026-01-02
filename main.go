@@ -2,15 +2,14 @@ package main
 
 import (
 	"context"
-	"embed"
 	_ "embed"
 	"log"
+	"os"
 	"path/filepath"
-	"runtime"
+	"sync"
 
-	"github.com/wailsapp/wails/v3/pkg/application"
-	"github.com/wailsapp/wails/v3/pkg/events"
-	"github.com/wailsapp/wails/v3/pkg/icons"
+	"github.com/getlantern/systray"
+	"github.com/pkg/browser"
 
 	"github.com/ibeckermayer/scroll4me/internal/auth"
 	"github.com/ibeckermayer/scroll4me/internal/config"
@@ -18,22 +17,17 @@ import (
 	"github.com/ibeckermayer/scroll4me/internal/store"
 )
 
-// Wails uses Go's `embed` package to embed the frontend files into the binary.
-// Any files in the frontend/dist folder will be embedded into the binary and
-// made available to the frontend.
+//go:embed assets/icon.png
+var iconBytes []byte
 
-//go:embed all:frontend/dist
-var assets embed.FS
-
-//go:embed build/appicon.png
-var appIcon []byte
-
-// App struct holds the application state exposed to the frontend
+// App holds the application state
 type App struct {
+	mu          sync.RWMutex
 	config      *config.Config
 	authManager *auth.Manager
 	store       *store.Store
 	scraper     *scraper.Scraper
+	paused      bool
 }
 
 // NewApp creates a new App instance
@@ -43,18 +37,8 @@ func NewApp(cfg *config.Config, authManager *auth.Manager, st *store.Store, sc *
 		authManager: authManager,
 		store:       st,
 		scraper:     sc,
+		paused:      false,
 	}
-}
-
-// GetConfig returns the current configuration (called from frontend)
-func (a *App) GetConfig() *config.Config {
-	return a.config
-}
-
-// SaveConfig saves the configuration (called from frontend)
-func (a *App) SaveConfig(cfg *config.Config) error {
-	a.config = cfg
-	return cfg.Save()
 }
 
 // IsAuthenticated checks if X.com credentials are stored
@@ -74,33 +58,46 @@ func (a *App) TriggerLogin() error {
 	return nil
 }
 
+// TriggerLogout clears stored X.com credentials
+func (a *App) TriggerLogout() error {
+	log.Println("Logout triggered - clearing stored cookies")
+	if err := a.authManager.Logout(); err != nil {
+		log.Printf("Logout failed: %v", err)
+		return err
+	}
+	log.Println("Logout successful - cookies cleared")
+	return nil
+}
+
 // TriggerScrape manually triggers a scrape
 func (a *App) TriggerScrape() error {
 	log.Println("Manual scrape triggered - starting scrape...")
 
-	// Check if authenticated
 	if !a.authManager.IsAuthenticated() {
-		return &ScrapeError{Message: "not authenticated - please login to X first"}
+		log.Println("Not authenticated - please login to X first")
+		return nil
 	}
 
-	// Get cookies for scraping
 	cookies, err := a.authManager.GetCookies()
 	if err != nil {
 		log.Printf("Failed to get cookies: %v", err)
-		return &ScrapeError{Message: "failed to get authentication cookies"}
+		return err
 	}
 
-	// Scrape the For You feed
+	// Read config with lock
+	a.mu.RLock()
+	postsPerScrape := a.config.Scraping.PostsPerScrape
+	a.mu.RUnlock()
+
 	ctx := context.Background()
-	posts, err := a.scraper.ScrapeForYou(ctx, cookies, a.config.Scraping.PostsPerScrape)
+	posts, err := a.scraper.ScrapeForYou(ctx, cookies, postsPerScrape)
 	if err != nil {
 		log.Printf("Scrape failed: %v", err)
-		return &ScrapeError{Message: "scraping failed: " + err.Error()}
+		return err
 	}
 
 	log.Printf("Scraped %d posts, saving to database...", len(posts))
 
-	// Save posts to the store
 	savedCount := 0
 	for _, post := range posts {
 		if err := a.store.SavePost(&post); err != nil {
@@ -114,15 +111,6 @@ func (a *App) TriggerScrape() error {
 	return nil
 }
 
-// ScrapeError represents a scraping error
-type ScrapeError struct {
-	Message string
-}
-
-func (e *ScrapeError) Error() string {
-	return e.Message
-}
-
 // TriggerDigest manually triggers digest generation and sending
 func (a *App) TriggerDigest() error {
 	// TODO: Call digest builder + notifier
@@ -130,14 +118,55 @@ func (a *App) TriggerDigest() error {
 	return nil
 }
 
+// ReloadConfig reloads the configuration from disk
+func (a *App) ReloadConfig() error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	a.mu.Lock()
+	a.config = cfg
+	a.mu.Unlock()
+	log.Println("Configuration reloaded")
+	return nil
+}
+
+// IsPaused returns whether the app is paused (thread-safe)
+func (a *App) IsPaused() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.paused
+}
+
+// SetPaused sets the paused state (thread-safe)
+func (a *App) SetPaused(paused bool) {
+	a.mu.Lock()
+	a.paused = paused
+	a.mu.Unlock()
+}
+
+// global app instance for cleanup in onExit
+var app *App
+
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-	// Load configuration
+	// Load or create configuration
 	cfg, err := config.Load()
 	if err != nil {
-		log.Printf("Warning: could not load config: %v (using defaults)", err)
-		cfg = config.Default()
+		if os.IsNotExist(err) {
+			// First run - create default config
+			cfg = config.Default()
+			if err := cfg.Save(); err != nil {
+				log.Printf("Warning: could not save default config: %v", err)
+			} else {
+				path, _ := config.ConfigPath()
+				log.Printf("Created default config at: %s", path)
+			}
+		} else {
+			log.Printf("Warning: could not load config: %v (using defaults)", err)
+			cfg = config.Default()
+		}
 	}
 
 	// Initialize cookie store and auth manager
@@ -158,141 +187,155 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize store: %v", err)
 	}
-	defer contentStore.Close()
+	defer contentStore.Close() // Ensure cleanup on any exit from main()
 
 	// Initialize scraper
 	postScraper := scraper.New(cfg.Scraping.Headless)
 
-	// Create app service for frontend bindings
-	appService := NewApp(cfg, authManager, contentStore, postScraper)
-
-	// Create Wails application
-	app := application.New(application.Options{
-		Name:        "scroll4me",
-		Description: "X digest without the doomscrolling",
-		Services: []application.Service{
-			application.NewService(appService),
-		},
-		Assets: application.AssetOptions{
-			Handler: application.AssetFileServerFS(assets),
-		},
-		Mac: application.MacOptions{
-			// Makes it a menu bar app (no dock icon)
-			ActivationPolicy: application.ActivationPolicyAccessory,
-		},
-	})
-
-	// Create system tray
-	systemTray := app.SystemTray.New()
-
-	// Create settings window (hidden by default, attached to tray)
-	settingsWindow := app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Name:            "Settings",
-		Title:           "scroll4me Settings",
-		Width:           450,
-		Height:          600,
-		Frameless:       false,
-		AlwaysOnTop:     true,
-		Hidden:          true,
-		DisableResize:   false,
-		URL:             "/",
-		DevToolsEnabled: true, // Enable DevTools for debugging (Cmd+Option+I on macOS)
-		Windows: application.WindowsWindow{
-			HiddenOnTaskbar: true,
-		},
-	})
-
-	// Hide window on close instead of quitting
-	settingsWindow.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
-		settingsWindow.Hide()
-		e.Cancel()
-	})
-
-	// Set tray icon
-	if runtime.GOOS == "darwin" {
-		systemTray.SetTemplateIcon(icons.SystrayMacTemplate)
-	} else {
-		systemTray.SetIcon(appIcon)
-	}
-
-	// Build tray menu
-	menu := app.NewMenu()
-
-	// Status section
-	statusItem := menu.Add("✓ Running")
-	statusItem.SetEnabled(false)
-
-	menu.AddSeparator()
-
-	lastScrapeItem := menu.Add("Last scrape: never")
-	lastScrapeItem.SetEnabled(false)
-
-	nextDigestItem := menu.Add("Next digest: not scheduled")
-	nextDigestItem.SetEnabled(false)
-
-	menu.AddSeparator()
-
-	// Actions
-	menu.Add("Scrape Now").OnClick(func(ctx *application.Context) {
-		go func() {
-			if err := appService.TriggerScrape(); err != nil {
-				log.Printf("Scrape error: %v", err)
-			}
-		}()
-	})
-
-	menu.Add("Send Digest Now").OnClick(func(ctx *application.Context) {
-		go func() {
-			if err := appService.TriggerDigest(); err != nil {
-				log.Printf("Digest error: %v", err)
-			}
-		}()
-	})
-
-	menu.AddSeparator()
-
-	// Settings
-	menu.Add("Settings...").OnClick(func(ctx *application.Context) {
-		settingsWindow.Show()
-	})
-
-	// View last digest in browser
-	menu.Add("View Last Digest").OnClick(func(ctx *application.Context) {
-		// TODO: Open last digest HTML in default browser
-		log.Println("View Last Digest clicked")
-	})
-
-	menu.AddSeparator()
-
-	// Pause/Resume
-	pauseItem := menu.Add("Pause")
-	pauseItem.OnClick(func(ctx *application.Context) {
-		// TODO: Implement pause/resume
-		if pauseItem.Label() == "Pause" {
-			pauseItem.SetLabel("Resume")
-			statusItem.SetLabel("⏸ Paused")
-		} else {
-			pauseItem.SetLabel("Pause")
-			statusItem.SetLabel("✓ Running")
-		}
-	})
-
-	menu.AddSeparator()
-
-	// Quit
-	menu.Add("Quit").OnClick(func(ctx *application.Context) {
-		app.Quit()
-	})
-
-	// Attach menu to tray (clicking tray icon shows this menu)
-	systemTray.SetMenu(menu)
-
-	// TODO: Initialize and start scheduler
+	// Create app
+	app = NewApp(cfg, authManager, contentStore, postScraper)
 
 	log.Println("scroll4me starting...")
 
-	// Run the application
-	if err := app.Run(); err != nil {
-		log.Fatal(err)
+	// Run systray (blocks until Quit)
+	systray.Run(onReady, onExit)
+}
+
+func onReady() {
+	// Set icon (template icon for macOS menu bar styling)
+	systray.SetTemplateIcon(iconBytes, iconBytes)
+	systray.SetTitle("")
+	systray.SetTooltip("scroll4me - X digest without the doomscrolling")
+
+	// Auth status (disabled, just for display)
+	var authStatusLabel string
+	if app.IsAuthenticated() {
+		authStatusLabel = "● Connected to X"
+	} else {
+		authStatusLabel = "○ Not connected"
+	}
+	mAuthStatus := systray.AddMenuItem(authStatusLabel, "Authentication status")
+	mAuthStatus.Disable()
+
+	// Auth action (Login / Logout)
+	var authActionLabel string
+	if app.IsAuthenticated() {
+		authActionLabel = "Logout"
+	} else {
+		authActionLabel = "Login to X"
+	}
+	mAuthAction := systray.AddMenuItem(authActionLabel, "Login or logout from X")
+
+	systray.AddSeparator()
+
+	// Actions
+	mScrape := systray.AddMenuItem("Scrape Now", "Trigger a manual scrape")
+	mDigest := systray.AddMenuItem("Send Digest Now", "Generate and send digest")
+
+	systray.AddSeparator()
+
+	// View last digest
+	mViewDigest := systray.AddMenuItem("View Last Digest", "Open last digest in browser")
+
+	// Edit config
+	mEditConfig := systray.AddMenuItem("Edit Config", "Open config file in editor")
+
+	// Reload config
+	mReloadConfig := systray.AddMenuItem("Reload Config", "Reload configuration from disk")
+
+	systray.AddSeparator()
+
+	// Pause/Resume
+	mPause := systray.AddMenuItem("Pause", "Pause scheduled tasks")
+
+	systray.AddSeparator()
+
+	// Quit
+	mQuit := systray.AddMenuItem("Quit", "Exit scroll4me")
+
+	// Helper to update auth UI
+	updateAuthUI := func() {
+		if app.IsAuthenticated() {
+			mAuthStatus.SetTitle("● Connected to X")
+			mAuthAction.SetTitle("Logout")
+		} else {
+			mAuthStatus.SetTitle("○ Not connected")
+			mAuthAction.SetTitle("Login to X")
+		}
+	}
+
+	// Handle menu clicks
+	go func() {
+		for {
+			select {
+			case <-mAuthAction.ClickedCh:
+				if app.IsAuthenticated() {
+					// Logout (no confirmation dialog in systray)
+					if err := app.TriggerLogout(); err != nil {
+						log.Printf("Logout error: %v", err)
+					}
+				} else {
+					if err := app.TriggerLogin(); err != nil {
+						log.Printf("Login error: %v", err)
+					}
+				}
+				updateAuthUI()
+
+			case <-mScrape.ClickedCh:
+				go func() {
+					if err := app.TriggerScrape(); err != nil {
+						log.Printf("Scrape error: %v", err)
+					}
+				}()
+
+			case <-mDigest.ClickedCh:
+				go func() {
+					if err := app.TriggerDigest(); err != nil {
+						log.Printf("Digest error: %v", err)
+					}
+				}()
+
+			case <-mViewDigest.ClickedCh:
+				// TODO: Open last digest HTML in default browser
+				log.Println("View Last Digest clicked")
+
+			case <-mEditConfig.ClickedCh:
+				path, err := config.ConfigPath()
+				if err != nil {
+					log.Printf("Failed to get config path: %v", err)
+					continue
+				}
+				if err := browser.OpenFile(path); err != nil {
+					log.Printf("Failed to open config file: %v", err)
+				}
+
+			case <-mReloadConfig.ClickedCh:
+				// TODO: implement hot reload of config
+				if err := app.ReloadConfig(); err != nil {
+					log.Printf("Failed to reload config: %v", err)
+				}
+
+			case <-mPause.ClickedCh:
+				if app.IsPaused() {
+					app.SetPaused(false)
+					mPause.SetTitle("Pause")
+					log.Println("Resumed")
+				} else {
+					app.SetPaused(true)
+					mPause.SetTitle("Resume")
+					log.Println("Paused")
+				}
+
+			case <-mQuit.ClickedCh:
+				systray.Quit()
+			}
+		}
+	}()
+}
+
+func onExit() {
+	log.Println("scroll4me shutting down...")
+	if app != nil && app.store != nil {
+		app.store.Close()
 	}
 }
