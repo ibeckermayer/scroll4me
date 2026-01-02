@@ -1,79 +1,51 @@
 package digest
 
 import (
-	"bytes"
 	"fmt"
-	"html/template"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
-	"github.com/ibeckermayer/scroll4me/internal/store"
+	"github.com/ibeckermayer/scroll4me/internal/types"
 )
 
-// Builder creates digest emails from analyzed posts
+// Builder creates markdown digest files from analyzed posts
 type Builder struct {
-	maxPosts int
-	template *template.Template
+	outputDir string
+	maxPosts  int
 }
 
 // New creates a new digest builder
-func New(maxPosts int) (*Builder, error) {
-	tmpl, err := template.New("digest").Parse(defaultTemplate)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse template: %w", err)
-	}
-
+func New(outputDir string, maxPosts int) *Builder {
 	return &Builder{
-		maxPosts: maxPosts,
-		template: tmpl,
-	}, nil
+		outputDir: outputDir,
+		maxPosts:  maxPosts,
+	}
 }
 
-// Digest represents a compiled digest ready for sending
+// Digest represents a generated digest
 type Digest struct {
-	Subject   string
-	HTMLBody  string
-	PlainBody string
-	PostIDs   []string
+	FilePath  string
+	PostCount int
 	CreatedAt time.Time
 }
 
-// DigestData is the template data structure
-type DigestData struct {
-	Title string
-	Date  string
-	Posts []PostData
-	Stats StatsData
-}
-
-// PostData represents a post in the digest template
-type PostData struct {
-	AuthorHandle string
-	AuthorName   string
-	Content      string
-	Summary      string
-	Topics       []string
-	Likes        int
-	Retweets     int
-	Replies      int
-	URL          string
-	Score        float64
-}
-
-// StatsData contains digest statistics
-type StatsData struct {
-	TotalAnalyzed int
-	TotalIncluded int
-}
-
-// Build creates a digest from analyzed posts
-func (b *Builder) Build(posts []store.PostWithAnalysis, digestType string) (*Digest, error) {
+// Build creates a markdown digest from analyzed posts and saves it to disk
+func (b *Builder) Build(posts []types.PostWithAnalysis, totalScraped int) (*Digest, error) {
 	if len(posts) == 0 {
 		return nil, fmt.Errorf("no posts to include in digest")
 	}
 
 	// Sort by relevance score descending
 	sort.Slice(posts, func(i, j int) bool {
+		if posts[i].Analysis == nil {
+			return false
+		}
+		if posts[j].Analysis == nil {
+			return true
+		}
 		return posts[i].Analysis.RelevanceScore > posts[j].Analysis.RelevanceScore
 	})
 
@@ -82,120 +54,141 @@ func (b *Builder) Build(posts []store.PostWithAnalysis, digestType string) (*Dig
 		posts = posts[:b.maxPosts]
 	}
 
-	// Build template data
+	// Build markdown content
 	now := time.Now()
-	data := DigestData{
-		Title: fmt.Sprintf("Your X Digest - %s", capitalize(digestType)),
-		Date:  now.Format("Monday, January 2"),
-		Posts: make([]PostData, len(posts)),
-		Stats: StatsData{
-			TotalIncluded: len(posts),
-		},
+	markdown := b.buildMarkdown(posts, now, totalScraped)
+
+	// Ensure output directory exists
+	if err := os.MkdirAll(b.outputDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create output directory: %w", err)
 	}
 
-	postIDs := make([]string, len(posts))
-	for i, p := range posts {
-		data.Posts[i] = PostData{
-			AuthorHandle: p.Post.AuthorHandle,
-			AuthorName:   p.Post.AuthorName,
-			Content:      truncate(p.Post.Content, 280),
-			Summary:      p.Analysis.Summary,
-			Topics:       p.Analysis.Topics,
-			Likes:        p.Post.Likes,
-			Retweets:     p.Post.Retweets,
-			Replies:      p.Post.Replies,
-			URL:          p.Post.OriginalURL,
-			Score:        p.Analysis.RelevanceScore,
-		}
-		postIDs[i] = p.Post.ID
-	}
+	// Generate filename
+	filename := fmt.Sprintf("%s-digest.md", now.Format("2006-01-02-150405"))
+	filePath := filepath.Join(b.outputDir, filename)
 
-	// Render HTML
-	var htmlBuf bytes.Buffer
-	if err := b.template.Execute(&htmlBuf, data); err != nil {
-		return nil, fmt.Errorf("failed to render template: %w", err)
+	// Write file
+	if err := os.WriteFile(filePath, []byte(markdown), 0644); err != nil {
+		return nil, fmt.Errorf("failed to write digest file: %w", err)
 	}
 
 	return &Digest{
-		Subject:   fmt.Sprintf("X Digest - %s, %s", capitalize(digestType), now.Format("Jan 2")),
-		HTMLBody:  htmlBuf.String(),
-		PlainBody: buildPlainText(data),
-		PostIDs:   postIDs,
+		FilePath:  filePath,
+		PostCount: len(posts),
 		CreatedAt: now,
 	}, nil
 }
 
-func capitalize(s string) string {
-	if len(s) == 0 {
-		return s
-	}
-	return string(s[0]-32) + s[1:]
-}
+// buildMarkdown generates the markdown content
+func (b *Builder) buildMarkdown(posts []types.PostWithAnalysis, now time.Time, totalScraped int) string {
+	var sb strings.Builder
 
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen-3] + "..."
-}
+	// Header
+	sb.WriteString("# X Digest\n\n")
+	sb.WriteString(fmt.Sprintf("**Generated:** %s\n\n", now.Format("Monday, January 2, 2006 at 3:04 PM")))
+	sb.WriteString(fmt.Sprintf("**Posts:** %d selected from %d scraped\n\n", len(posts), totalScraped))
+	sb.WriteString("---\n\n")
 
-func buildPlainText(data DigestData) string {
-	var buf bytes.Buffer
-	buf.WriteString(fmt.Sprintf("%s\n%s\n\n", data.Title, data.Date))
-
-	for i, p := range data.Posts {
-		buf.WriteString(fmt.Sprintf("%d. @%s: %s\n", i+1, p.AuthorHandle, p.Summary))
-		buf.WriteString(fmt.Sprintf("   %s\n\n", p.URL))
+	// Posts
+	for i, p := range posts {
+		sb.WriteString(b.formatPost(i+1, p))
+		sb.WriteString("\n---\n\n")
 	}
 
-	return buf.String()
+	// Footer
+	sb.WriteString("*Generated by scroll4me*\n")
+
+	return sb.String()
 }
 
-const defaultTemplate = `<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{{.Title}}</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background: #f5f5f5; }
-        .container { background: white; border-radius: 8px; padding: 20px; }
-        h1 { color: #1da1f2; margin-bottom: 5px; }
-        .date { color: #666; margin-bottom: 20px; }
-        .post { border-bottom: 1px solid #eee; padding: 15px 0; }
-        .post:last-child { border-bottom: none; }
-        .author { font-weight: bold; color: #333; }
-        .handle { color: #666; }
-        .content { margin: 10px 0; line-height: 1.4; }
-        .summary { color: #1da1f2; font-style: italic; margin: 8px 0; }
-        .topics { margin: 5px 0; }
-        .topic { background: #e8f5fd; color: #1da1f2; padding: 2px 8px; border-radius: 12px; font-size: 12px; margin-right: 5px; }
-        .metrics { color: #666; font-size: 13px; }
-        .link { color: #1da1f2; text-decoration: none; }
-        .footer { margin-top: 20px; padding-top: 15px; border-top: 1px solid #eee; color: #999; font-size: 12px; text-align: center; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>{{.Title}}</h1>
-        <div class="date">{{.Date}}</div>
+// formatPost formats a single post for the digest
+func (b *Builder) formatPost(num int, p types.PostWithAnalysis) string {
+	var sb strings.Builder
 
-        {{range .Posts}}
-        <div class="post">
-            <div class="author">{{.AuthorName}} <span class="handle">@{{.AuthorHandle}}</span></div>
-            <div class="content">{{.Content}}</div>
-            <div class="summary">{{.Summary}}</div>
-            <div class="topics">
-                {{range .Topics}}<span class="topic">{{.}}</span>{{end}}
-            </div>
-            <div class="metrics">{{.Likes}} likes · {{.Retweets}} retweets · {{.Replies}} replies</div>
-            <a href="{{.URL}}" class="link">View on X →</a>
-        </div>
-        {{end}}
+	// Post header with author
+	sb.WriteString(fmt.Sprintf("## %d. @%s", num, p.Post.AuthorHandle))
+	if p.Post.AuthorName != "" && p.Post.AuthorName != p.Post.AuthorHandle {
+		sb.WriteString(fmt.Sprintf(" (%s)", p.Post.AuthorName))
+	}
+	sb.WriteString("\n\n")
 
-        <div class="footer">
-            Included {{.Stats.TotalIncluded}} posts · Generated by scroll4me
-        </div>
-    </div>
-</body>
-</html>`
+	// Analysis summary
+	if p.Analysis != nil {
+		sb.WriteString(fmt.Sprintf("**Summary:** %s\n\n", p.Analysis.Summary))
+
+		// Topics
+		if len(p.Analysis.Topics) > 0 {
+			sb.WriteString(fmt.Sprintf("**Topics:** %s\n\n", strings.Join(p.Analysis.Topics, ", ")))
+		}
+
+		// Relevance score
+		sb.WriteString(fmt.Sprintf("**Relevance:** %.0f%%\n\n", p.Analysis.RelevanceScore*100))
+	}
+
+	// Original content
+	sb.WriteString("### Post Content\n\n")
+	sb.WriteString(fmt.Sprintf("> %s\n\n", formatQuote(p.Post.Content)))
+
+	// Engagement metrics
+	sb.WriteString(fmt.Sprintf("📊 %d likes · %d retweets · %d replies\n\n",
+		p.Post.Likes, p.Post.Retweets, p.Post.Replies))
+
+	// Link
+	if p.Post.OriginalURL != "" {
+		sb.WriteString(fmt.Sprintf("🔗 [View on X](%s)\n\n", p.Post.OriginalURL))
+	}
+
+	// Context (replies) if available
+	if len(p.Context) > 0 {
+		sb.WriteString("### Notable Replies\n\n")
+		for _, reply := range p.Context {
+			sb.WriteString(fmt.Sprintf("**@%s:**\n", reply.AuthorHandle))
+			sb.WriteString(fmt.Sprintf("> %s\n\n", formatQuote(reply.Content)))
+		}
+	}
+
+	return sb.String()
+}
+
+// formatQuote formats text for markdown blockquote (handles newlines)
+func formatQuote(s string) string {
+	// Replace newlines with newline + quote prefix
+	lines := strings.Split(s, "\n")
+	return strings.Join(lines, "\n> ")
+}
+
+// GetLatestDigest returns the path to the most recent digest file
+func GetLatestDigest(outputDir string) (string, error) {
+	entries, err := os.ReadDir(outputDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("no digests found")
+		}
+		return "", err
+	}
+
+	var latest string
+	var latestTime time.Time
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "-digest.md") {
+			continue
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		if info.ModTime().After(latestTime) {
+			latestTime = info.ModTime()
+			latest = filepath.Join(outputDir, entry.Name())
+		}
+	}
+
+	if latest == "" {
+		return "", fmt.Errorf("no digests found")
+	}
+
+	return latest, nil
+}

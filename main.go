@@ -5,16 +5,18 @@ import (
 	_ "embed"
 	"log"
 	"os"
-	"path/filepath"
 	"sync"
 
 	"github.com/getlantern/systray"
 	"github.com/pkg/browser"
 
+	"github.com/ibeckermayer/scroll4me/internal/analyzer"
+	"github.com/ibeckermayer/scroll4me/internal/analyzer/providers"
 	"github.com/ibeckermayer/scroll4me/internal/auth"
 	"github.com/ibeckermayer/scroll4me/internal/config"
+	"github.com/ibeckermayer/scroll4me/internal/digest"
 	"github.com/ibeckermayer/scroll4me/internal/scraper"
-	"github.com/ibeckermayer/scroll4me/internal/store"
+	"github.com/ibeckermayer/scroll4me/internal/types"
 )
 
 //go:embed assets/icon.png
@@ -25,19 +27,17 @@ type App struct {
 	mu          sync.RWMutex
 	config      *config.Config
 	authManager *auth.Manager
-	store       *store.Store
 	scraper     *scraper.Scraper
-	paused      bool
+	analyzer    *analyzer.Analyzer
 }
 
 // NewApp creates a new App instance
-func NewApp(cfg *config.Config, authManager *auth.Manager, st *store.Store, sc *scraper.Scraper) *App {
+func NewApp(cfg *config.Config, authManager *auth.Manager, sc *scraper.Scraper, an *analyzer.Analyzer) *App {
 	return &App{
 		config:      cfg,
 		authManager: authManager,
-		store:       st,
 		scraper:     sc,
-		paused:      false,
+		analyzer:    an,
 	}
 }
 
@@ -69,9 +69,9 @@ func (a *App) TriggerLogout() error {
 	return nil
 }
 
-// TriggerScrape manually triggers a scrape
-func (a *App) TriggerScrape() error {
-	log.Println("Manual scrape triggered - starting scrape...")
+// GenerateDigest performs the full scrape -> analyze -> build digest flow
+func (a *App) GenerateDigest() error {
+	log.Println("Generate Digest triggered...")
 
 	if !a.authManager.IsAuthenticated() {
 		log.Println("Not authenticated - please login to X first")
@@ -84,38 +84,110 @@ func (a *App) TriggerScrape() error {
 		return err
 	}
 
-	// Read config with lock
+	// Read config and components with lock to avoid race with ReloadConfig
 	a.mu.RLock()
-	postsPerScrape := a.config.Scraping.PostsPerScrape
+	cfg := a.config
+	sc := a.scraper
+	an := a.analyzer
 	a.mu.RUnlock()
 
 	ctx := context.Background()
-	posts, err := a.scraper.ScrapeForYou(ctx, cookies, postsPerScrape)
+
+	// Step 1: Scrape posts
+	log.Printf("Scraping %d posts from For You feed...", cfg.Scraping.PostsPerScrape)
+	posts, err := sc.ScrapeForYou(ctx, cookies, cfg.Scraping.PostsPerScrape)
 	if err != nil {
 		log.Printf("Scrape failed: %v", err)
 		return err
 	}
+	log.Printf("Scraped %d posts", len(posts))
 
-	log.Printf("Scraped %d posts, saving to database...", len(posts))
-
-	savedCount := 0
-	for _, post := range posts {
-		if err := a.store.SavePost(&post); err != nil {
-			log.Printf("Failed to save post %s: %v", post.ID, err)
-			continue
-		}
-		savedCount++
+	if len(posts) == 0 {
+		log.Println("No posts scraped - nothing to analyze")
+		return nil
 	}
 
-	log.Printf("Scrape complete: saved %d/%d posts", savedCount, len(posts))
+	// Step 2: Analyze posts with LLM
+	log.Println("Analyzing posts with LLM...")
+	analyses, err := an.AnalyzePosts(ctx, posts)
+	if err != nil {
+		log.Printf("Analysis failed: %v", err)
+		return err
+	}
+	log.Printf("Analyzed %d posts", len(analyses))
+
+	// Step 3: Filter by relevance threshold and combine with posts
+	analysisMap := make(map[string]*types.Analysis)
+	for i := range analyses {
+		analysisMap[analyses[i].PostID] = &analyses[i]
+	}
+
+	var relevantPosts []types.PostWithAnalysis
+	for _, post := range posts {
+		analysis, ok := analysisMap[post.ID]
+		if !ok {
+			continue
+		}
+		if analysis.RelevanceScore >= cfg.Analysis.RelevanceThreshold {
+			relevantPosts = append(relevantPosts, types.PostWithAnalysis{
+				Post:     post,
+				Analysis: analysis,
+			})
+		}
+	}
+
+	log.Printf("Found %d posts above relevance threshold (%.0f%%)",
+		len(relevantPosts), cfg.Analysis.RelevanceThreshold*100)
+
+	if len(relevantPosts) == 0 {
+		log.Println("No posts above relevance threshold - no digest generated")
+		return nil
+	}
+
+	// Step 4: Fetch context (replies) for posts that need it
+	if cfg.Digest.IncludeContext {
+		log.Println("Fetching context for relevant posts...")
+		for i := range relevantPosts {
+			if relevantPosts[i].Analysis.NeedsContext {
+				log.Printf("Fetching replies for post %s...", relevantPosts[i].Post.ID)
+				replies, err := sc.ScrapeThread(ctx, cookies, relevantPosts[i].Post.OriginalURL, 3)
+				if err != nil {
+					log.Printf("Failed to fetch replies for %s: %v", relevantPosts[i].Post.ID, err)
+					continue
+				}
+				relevantPosts[i].Context = replies
+				log.Printf("Got %d replies for post %s", len(replies), relevantPosts[i].Post.ID)
+			}
+		}
+	}
+
+	// Step 5: Build and save digest
+	log.Println("Building digest...")
+	builder := digest.New(cfg.Digest.OutputDir, cfg.Digest.MaxPosts)
+	d, err := builder.Build(relevantPosts, len(posts))
+	if err != nil {
+		log.Printf("Failed to build digest: %v", err)
+		return err
+	}
+
+	log.Printf("Digest saved to: %s (%d posts)", d.FilePath, d.PostCount)
 	return nil
 }
 
-// TriggerDigest manually triggers digest generation and sending
-func (a *App) TriggerDigest() error {
-	// TODO: Call digest builder + notifier
-	log.Println("Manual digest triggered")
-	return nil
+// ViewLastDigest opens the most recent digest file
+func (a *App) ViewLastDigest() error {
+	a.mu.RLock()
+	outputDir := a.config.Digest.OutputDir
+	a.mu.RUnlock()
+
+	path, err := digest.GetLatestDigest(outputDir)
+	if err != nil {
+		log.Printf("No digest found: %v", err)
+		return err
+	}
+
+	log.Printf("Opening digest: %s", path)
+	return browser.OpenFile(path)
 }
 
 // ReloadConfig reloads the configuration from disk
@@ -124,28 +196,22 @@ func (a *App) ReloadConfig() error {
 	if err != nil {
 		return err
 	}
+
+	// Recreate analyzer with new config
+	provider := providers.NewClaudeProvider(cfg.Analysis.APIKey, cfg.Analysis.Model)
+	newAnalyzer := analyzer.New(provider, cfg.Interests, cfg.Analysis.BatchSize)
+
 	a.mu.Lock()
 	a.config = cfg
+	a.analyzer = newAnalyzer
+	a.scraper = scraper.New(cfg.Scraping.Headless)
 	a.mu.Unlock()
+
 	log.Println("Configuration reloaded")
 	return nil
 }
 
-// IsPaused returns whether the app is paused (thread-safe)
-func (a *App) IsPaused() bool {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.paused
-}
-
-// SetPaused sets the paused state (thread-safe)
-func (a *App) SetPaused(paused bool) {
-	a.mu.Lock()
-	a.paused = paused
-	a.mu.Unlock()
-}
-
-// global app instance for cleanup in onExit
+// global app instance for systray callbacks
 var app *App
 
 func main() {
@@ -177,23 +243,15 @@ func main() {
 	cookieStore := auth.NewCookieStore(cookieStorePath)
 	authManager := auth.NewManager(cookieStore)
 
-	// Initialize SQLite store
-	configDir, err := config.ConfigDir()
-	if err != nil {
-		log.Fatalf("Failed to get config directory: %v", err)
-	}
-	dbPath := filepath.Join(configDir, "scroll4me.db")
-	contentStore, err := store.New(dbPath)
-	if err != nil {
-		log.Fatalf("Failed to initialize store: %v", err)
-	}
-	defer contentStore.Close() // Ensure cleanup on any exit from main()
-
 	// Initialize scraper
 	postScraper := scraper.New(cfg.Scraping.Headless)
 
+	// Initialize analyzer
+	provider := providers.NewClaudeProvider(cfg.Analysis.APIKey, cfg.Analysis.Model)
+	postAnalyzer := analyzer.New(provider, cfg.Interests, cfg.Analysis.BatchSize)
+
 	// Create app
-	app = NewApp(cfg, authManager, contentStore, postScraper)
+	app = NewApp(cfg, authManager, postScraper, postAnalyzer)
 
 	log.Println("scroll4me starting...")
 
@@ -228,25 +286,19 @@ func onReady() {
 
 	systray.AddSeparator()
 
-	// Actions
-	mScrape := systray.AddMenuItem("Scrape Now", "Trigger a manual scrape")
-	mDigest := systray.AddMenuItem("Send Digest Now", "Generate and send digest")
+	// Generate Digest (combined scrape + analyze + build)
+	mGenerateDigest := systray.AddMenuItem("Generate Digest", "Scrape, analyze, and create digest")
 
 	systray.AddSeparator()
 
 	// View last digest
-	mViewDigest := systray.AddMenuItem("View Last Digest", "Open last digest in browser")
+	mViewDigest := systray.AddMenuItem("View Last Digest", "Open last digest file")
 
 	// Edit config
 	mEditConfig := systray.AddMenuItem("Edit Config", "Open config file in editor")
 
 	// Reload config
 	mReloadConfig := systray.AddMenuItem("Reload Config", "Reload configuration from disk")
-
-	systray.AddSeparator()
-
-	// Pause/Resume
-	mPause := systray.AddMenuItem("Pause", "Pause scheduled tasks")
 
 	systray.AddSeparator()
 
@@ -270,7 +322,6 @@ func onReady() {
 			select {
 			case <-mAuthAction.ClickedCh:
 				if app.IsAuthenticated() {
-					// Logout (no confirmation dialog in systray)
 					if err := app.TriggerLogout(); err != nil {
 						log.Printf("Logout error: %v", err)
 					}
@@ -281,23 +332,17 @@ func onReady() {
 				}
 				updateAuthUI()
 
-			case <-mScrape.ClickedCh:
+			case <-mGenerateDigest.ClickedCh:
 				go func() {
-					if err := app.TriggerScrape(); err != nil {
-						log.Printf("Scrape error: %v", err)
-					}
-				}()
-
-			case <-mDigest.ClickedCh:
-				go func() {
-					if err := app.TriggerDigest(); err != nil {
-						log.Printf("Digest error: %v", err)
+					if err := app.GenerateDigest(); err != nil {
+						log.Printf("Generate digest error: %v", err)
 					}
 				}()
 
 			case <-mViewDigest.ClickedCh:
-				// TODO: Open last digest HTML in default browser
-				log.Println("View Last Digest clicked")
+				if err := app.ViewLastDigest(); err != nil {
+					log.Printf("View digest error: %v", err)
+				}
 
 			case <-mEditConfig.ClickedCh:
 				path, err := config.ConfigPath()
@@ -310,20 +355,8 @@ func onReady() {
 				}
 
 			case <-mReloadConfig.ClickedCh:
-				// TODO: implement hot reload of config
 				if err := app.ReloadConfig(); err != nil {
 					log.Printf("Failed to reload config: %v", err)
-				}
-
-			case <-mPause.ClickedCh:
-				if app.IsPaused() {
-					app.SetPaused(false)
-					mPause.SetTitle("Pause")
-					log.Println("Resumed")
-				} else {
-					app.SetPaused(true)
-					mPause.SetTitle("Resume")
-					log.Println("Paused")
 				}
 
 			case <-mQuit.ClickedCh:
@@ -335,7 +368,4 @@ func onReady() {
 
 func onExit() {
 	log.Println("scroll4me shutting down...")
-	if app != nil && app.store != nil {
-		app.store.Close()
-	}
 }

@@ -1,4 +1,4 @@
-package store
+package types
 
 import "time"
 
@@ -31,16 +31,9 @@ type Analysis struct {
 	AnalyzedAt     time.Time `json:"analyzed_at"`
 }
 
-// DigestEntry represents a post that was included in a digest
-type DigestEntry struct {
-	ID           int64     `json:"id"`
-	PostID       string    `json:"post_id"`
-	DigestSentAt time.Time `json:"digest_sent_at"`
-	DigestType   string    `json:"digest_type"` // "morning" or "evening"
-}
-
-// PostWithAnalysis combines a post with its analysis
+// PostWithAnalysis combines a post with its analysis and optional context
 type PostWithAnalysis struct {
 	Post     Post
-	Analysis *Analysis // nil if not yet analyzed
+	Analysis *Analysis
+	Context  []Post // Replies/thread context if fetched
 }

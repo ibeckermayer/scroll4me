@@ -5,11 +5,11 @@ import (
 	"strings"
 
 	"github.com/ibeckermayer/scroll4me/internal/config"
-	"github.com/ibeckermayer/scroll4me/internal/store"
+	"github.com/ibeckermayer/scroll4me/internal/types"
 )
 
 // BuildPrompt constructs the LLM prompt for analyzing posts
-func BuildPrompt(posts []store.Post, interests config.InterestsConfig) string {
+func BuildPrompt(posts []types.Post, interests config.InterestsConfig) string {
 	var sb strings.Builder
 
 	sb.WriteString("You are analyzing social media posts for relevance to a user's interests.\n\n")

@@ -5,12 +5,12 @@ import (
 	"fmt"
 
 	"github.com/ibeckermayer/scroll4me/internal/config"
-	"github.com/ibeckermayer/scroll4me/internal/store"
+	"github.com/ibeckermayer/scroll4me/internal/types"
 )
 
 // Provider defines the interface for LLM providers
 type Provider interface {
-	Analyze(ctx context.Context, posts []store.Post, interests config.InterestsConfig) ([]store.Analysis, error)
+	Analyze(ctx context.Context, posts []types.Post, interests config.InterestsConfig) ([]types.Analysis, error)
 }
 
 // Analyzer handles LLM-based post analysis
@@ -30,12 +30,12 @@ func New(provider Provider, interests config.InterestsConfig, batchSize int) *An
 }
 
 // AnalyzePosts processes posts through the LLM for relevance scoring
-func (a *Analyzer) AnalyzePosts(ctx context.Context, posts []store.Post) ([]store.Analysis, error) {
+func (a *Analyzer) AnalyzePosts(ctx context.Context, posts []types.Post) ([]types.Analysis, error) {
 	if len(posts) == 0 {
 		return nil, nil
 	}
 
-	var allAnalyses []store.Analysis
+	var allAnalyses []types.Analysis
 
 	// Process in batches
 	for i := 0; i < len(posts); i += a.batchSize {

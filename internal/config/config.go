@@ -14,7 +14,6 @@ type Config struct {
 	Scraping  ScrapingConfig  `toml:"scraping"`
 	Analysis  AnalysisConfig  `toml:"analysis"`
 	Digest    DigestConfig    `toml:"digest"`
-	Email     EmailConfig     `toml:"email"`
 }
 
 type InterestsConfig struct {
@@ -25,9 +24,8 @@ type InterestsConfig struct {
 }
 
 type ScrapingConfig struct {
-	PostsPerScrape      int  `toml:"posts_per_scrape"`
-	ScrapeIntervalHours int  `toml:"scrape_interval_hours"`
-	Headless            bool `toml:"headless"`
+	PostsPerScrape int  `toml:"posts_per_scrape"`
+	Headless       bool `toml:"headless"`
 }
 
 type AnalysisConfig struct {
@@ -39,25 +37,14 @@ type AnalysisConfig struct {
 }
 
 type DigestConfig struct {
-	MorningTime       string `toml:"morning_time"`
-	EveningTime       string `toml:"evening_time"`
-	Timezone          string `toml:"timezone"`
-	MaxPostsPerDigest int    `toml:"max_posts_per_digest"`
-	IncludeContext    bool   `toml:"include_context"`
-}
-
-type EmailConfig struct {
-	Provider string `toml:"provider"`
-	SMTPHost string `toml:"smtp_host"`
-	SMTPPort int    `toml:"smtp_port"`
-	SMTPUser string `toml:"smtp_user"`
-	SMTPPass string `toml:"smtp_pass"`
-	FromAddr string `toml:"from_address"`
-	ToAddr   string `toml:"to_address"`
+	OutputDir      string `toml:"output_dir"`
+	MaxPosts       int    `toml:"max_posts"`
+	IncludeContext bool   `toml:"include_context"`
 }
 
 // Default returns a Config with sensible defaults
 func Default() *Config {
+	outputDir, _ := DefaultDigestDir()
 	return &Config{
 		Version: 1,
 		Interests: InterestsConfig{
@@ -67,9 +54,8 @@ func Default() *Config {
 			MutedKeywords:    []string{},
 		},
 		Scraping: ScrapingConfig{
-			PostsPerScrape:      100,
-			ScrapeIntervalHours: 2,
-			Headless:            true,
+			PostsPerScrape: 100,
+			Headless:       true,
 		},
 		Analysis: AnalysisConfig{
 			LLMProvider:        "claude",
@@ -78,15 +64,9 @@ func Default() *Config {
 			BatchSize:          10,
 		},
 		Digest: DigestConfig{
-			MorningTime:       "07:00",
-			EveningTime:       "18:00",
-			Timezone:          "America/New_York",
-			MaxPostsPerDigest: 20,
-			IncludeContext:    true,
-		},
-		Email: EmailConfig{
-			Provider: "smtp",
-			SMTPPort: 587,
+			OutputDir:      outputDir,
+			MaxPosts:       20,
+			IncludeContext: true,
 		},
 	}
 }
@@ -98,6 +78,15 @@ func ConfigDir() (string, error) {
 		return "", err
 	}
 	return filepath.Join(configDir, "scroll4me"), nil
+}
+
+// DefaultDigestDir returns the default digest output directory
+func DefaultDigestDir() (string, error) {
+	dir, err := ConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "digests"), nil
 }
 
 // ConfigPath returns the full path to the config file

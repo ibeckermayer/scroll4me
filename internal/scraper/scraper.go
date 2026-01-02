@@ -9,7 +9,7 @@ import (
 
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
-	"github.com/ibeckermayer/scroll4me/internal/store"
+	"github.com/ibeckermayer/scroll4me/internal/types"
 )
 
 // Scraper handles extracting posts from X.com
@@ -23,7 +23,7 @@ func New(headless bool) *Scraper {
 }
 
 // ScrapeForYou fetches posts from the For You feed
-func (s *Scraper) ScrapeForYou(ctx context.Context, cookies []*network.Cookie, count int) ([]store.Post, error) {
+func (s *Scraper) ScrapeForYou(ctx context.Context, cookies []*network.Cookie, count int) ([]types.Post, error) {
 	// Create browser context with options
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", s.headless),
@@ -85,8 +85,8 @@ func (s *Scraper) injectCookies(ctx context.Context, cookies []*network.Cookie) 
 }
 
 // extractPosts scrolls and extracts posts from the feed
-func (s *Scraper) extractPosts(ctx context.Context, count int) ([]store.Post, error) {
-	var posts []store.Post
+func (s *Scraper) extractPosts(ctx context.Context, count int) ([]types.Post, error) {
+	var posts []types.Post
 	seenIDs := make(map[string]bool)
 	scrollAttempts := 0
 	maxScrollAttempts := count / 5 // Rough estimate: ~5 posts per scroll
@@ -142,7 +142,7 @@ type rawPost struct {
 }
 
 // extractVisiblePosts parses currently visible tweets
-func (s *Scraper) extractVisiblePosts(ctx context.Context) ([]store.Post, error) {
+func (s *Scraper) extractVisiblePosts(ctx context.Context) ([]types.Post, error) {
 	var rawPosts []rawPost
 
 	// JavaScript to extract tweet data from the DOM
@@ -253,8 +253,8 @@ func (s *Scraper) extractVisiblePosts(ctx context.Context) ([]store.Post, error)
 		return nil, fmt.Errorf("failed to extract posts from DOM: %w", err)
 	}
 
-	// Convert raw posts to store.Post
-	posts := make([]store.Post, 0, len(rawPosts))
+	// Convert raw posts to types.Post
+	posts := make([]types.Post, 0, len(rawPosts))
 	now := time.Now()
 
 	for _, rp := range rawPosts {
@@ -270,7 +270,7 @@ func (s *Scraper) extractVisiblePosts(ctx context.Context) ([]store.Post, error)
 			}
 		}
 
-		post := store.Post{
+		post := types.Post{
 			ID:           rp.ID,
 			AuthorHandle: rp.AuthorHandle,
 			AuthorName:   rp.AuthorName,
@@ -301,11 +301,228 @@ func (s *Scraper) scroll(ctx context.Context) error {
 }
 
 // ScrapeThread fetches replies for a specific post (for context enrichment)
-func (s *Scraper) ScrapeThread(ctx context.Context, cookies []*network.Cookie, postURL string, replyCount int) ([]store.Post, error) {
-	// TODO: Implement thread scraping
-	// Similar to ScrapeForYou but navigates to specific post URL
-	// and extracts top replies
-	return nil, fmt.Errorf("not implemented")
+func (s *Scraper) ScrapeThread(ctx context.Context, cookies []*network.Cookie, postURL string, replyCount int) ([]types.Post, error) {
+	// Create browser context with options
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Flag("headless", s.headless),
+		chromedp.Flag("disable-gpu", true),
+	)
+
+	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
+	defer allocCancel()
+
+	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
+	defer browserCancel()
+
+	// Set timeout for the thread scrape operation
+	browserCtx, timeoutCancel := context.WithTimeout(browserCtx, 2*time.Minute)
+	defer timeoutCancel()
+
+	// Inject cookies before navigation
+	if err := s.injectCookies(browserCtx, cookies); err != nil {
+		return nil, fmt.Errorf("failed to inject cookies: %w", err)
+	}
+
+	// Navigate to the post URL
+	if err := chromedp.Run(browserCtx,
+		chromedp.Navigate(postURL),
+		chromedp.WaitVisible(`article[data-testid="tweet"]`, chromedp.ByQuery),
+	); err != nil {
+		return nil, fmt.Errorf("failed to load post: %w", err)
+	}
+
+	// Wait a bit for replies to load
+	time.Sleep(2 * time.Second)
+
+	// Extract replies (skip the first tweet which is the main post)
+	replies, err := s.extractReplies(browserCtx, replyCount)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract replies: %w", err)
+	}
+
+	return replies, nil
+}
+
+// extractReplies extracts reply tweets from a thread page
+func (s *Scraper) extractReplies(ctx context.Context, count int) ([]types.Post, error) {
+	var replies []types.Post
+	seenIDs := make(map[string]bool)
+	scrollAttempts := 0
+	maxScrollAttempts := count/3 + 5 // Replies are often fewer per scroll
+
+	for len(replies) < count && scrollAttempts < maxScrollAttempts {
+		// Extract visible replies
+		newReplies, err := s.extractVisibleReplies(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		// Add unique replies
+		for _, r := range newReplies {
+			if !seenIDs[r.ID] {
+				seenIDs[r.ID] = true
+				replies = append(replies, r)
+			}
+		}
+
+		// Scroll down
+		if err := s.scroll(ctx); err != nil {
+			return nil, err
+		}
+
+		// Wait for new content to load
+		time.Sleep(time.Duration(800+scrollAttempts*150) * time.Millisecond)
+		scrollAttempts++
+	}
+
+	// Limit to requested count
+	if len(replies) > count {
+		replies = replies[:count]
+	}
+
+	return replies, nil
+}
+
+// extractVisibleReplies extracts reply tweets from the current view
+// This skips the main tweet (first article) and gets the replies
+func (s *Scraper) extractVisibleReplies(ctx context.Context) ([]types.Post, error) {
+	var rawPosts []rawPost
+
+	// JavaScript to extract reply tweets (skipping the main tweet)
+	extractJS := `
+		(function() {
+			const tweets = document.querySelectorAll('article[data-testid="tweet"]');
+			const results = [];
+			let skippedFirst = false;
+
+			tweets.forEach(el => {
+				// Skip the first tweet (main post)
+				if (!skippedFirst) {
+					skippedFirst = true;
+					return;
+				}
+
+				try {
+					// Extract tweet ID from status link
+					const statusLink = el.querySelector('a[href*="/status/"]');
+					const id = statusLink?.href?.match(/status\/(\d+)/)?.[1];
+					if (!id) return;
+
+					// Extract author info
+					const userNameEl = el.querySelector('[data-testid="User-Name"]');
+					let authorHandle = '';
+					let authorName = '';
+					if (userNameEl) {
+						const handleLink = userNameEl.querySelector('a[href^="/"]');
+						if (handleLink) {
+							authorHandle = handleLink.getAttribute('href')?.replace('/', '') || '';
+						}
+						const nameSpan = userNameEl.querySelector('span');
+						authorName = nameSpan?.textContent || '';
+					}
+
+					// Extract tweet text
+					const tweetTextEl = el.querySelector('[data-testid="tweetText"]');
+					const content = tweetTextEl?.textContent || '';
+
+					// Extract media URLs
+					const mediaUrls = [];
+					const mediaEls = el.querySelectorAll('[data-testid="tweetPhoto"] img, [data-testid="videoPlayer"] video');
+					mediaEls.forEach(m => {
+						const src = m.src || m.poster;
+						if (src) mediaUrls.push(src);
+					});
+
+					// Extract timestamp
+					const timeEl = el.querySelector('time');
+					const timestamp = timeEl?.getAttribute('datetime') || '';
+
+					// Extract engagement metrics
+					const getMetric = (testId) => {
+						const metricEl = el.querySelector('[data-testid="' + testId + '"]');
+						if (!metricEl) return '0';
+						const ariaLabel = metricEl.getAttribute('aria-label');
+						if (ariaLabel) {
+							const match = ariaLabel.match(/^([\d,.]+[KkMm]?)/);
+							return match ? match[1] : '0';
+						}
+						return metricEl.textContent?.trim() || '0';
+					};
+
+					const replies = getMetric('reply');
+					const retweets = getMetric('retweet');
+					const likes = getMetric('like');
+
+					const originalUrl = statusLink?.href || '';
+
+					results.push({
+						id,
+						authorHandle,
+						authorName,
+						content,
+						mediaUrls,
+						timestamp,
+						likes,
+						retweets,
+						replies,
+						isRetweet: false,
+						isQuoteTweet: false,
+						isReply: true,
+						originalUrl
+					});
+				} catch (e) {
+					console.error('Error extracting reply:', e);
+				}
+			});
+
+			return results;
+		})()
+	`
+
+	err := chromedp.Run(ctx,
+		chromedp.Evaluate(extractJS, &rawPosts),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract replies from DOM: %w", err)
+	}
+
+	// Convert raw posts to types.Post
+	posts := make([]types.Post, 0, len(rawPosts))
+	now := time.Now()
+
+	for _, rp := range rawPosts {
+		if rp.ID == "" {
+			continue
+		}
+
+		var timestamp time.Time
+		if rp.Timestamp != "" {
+			if parsed, err := time.Parse(time.RFC3339, rp.Timestamp); err == nil {
+				timestamp = parsed
+			}
+		}
+
+		post := types.Post{
+			ID:           rp.ID,
+			AuthorHandle: rp.AuthorHandle,
+			AuthorName:   rp.AuthorName,
+			Content:      rp.Content,
+			MediaURLs:    rp.MediaURLs,
+			Timestamp:    timestamp,
+			Likes:        parseMetric(rp.Likes),
+			Retweets:     parseMetric(rp.Retweets),
+			Replies:      parseMetric(rp.Replies),
+			QuoteTweets:  0,
+			IsRetweet:    false,
+			IsQuoteTweet: false,
+			IsReply:      true,
+			OriginalURL:  rp.OriginalURL,
+			ScrapedAt:    now,
+		}
+		posts = append(posts, post)
+	}
+
+	return posts, nil
 }
 
 // parseMetric converts abbreviated metric strings like "1.2K", "5.7M", or "423" to integers
