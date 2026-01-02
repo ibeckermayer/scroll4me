@@ -8,6 +8,8 @@ import (
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/storage"
 	"github.com/chromedp/chromedp"
+
+	"github.com/ibeckermayer/scroll4me/internal/browser"
 )
 
 // Manager handles X.com authentication
@@ -28,15 +30,9 @@ func (m *Manager) IsAuthenticated() bool {
 // Login opens a browser window for the user to log in to X.com
 // Returns extracted cookies on successful login
 func (m *Manager) Login(ctx context.Context) error {
-	// Create a visible (headful) browser context
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", false), // Visible browser
-		chromedp.Flag("disable-gpu", false),
-		chromedp.Flag("start-maximized", true),
-		// Prevent `navigator.webdriver = true`, which seems enough to trick
-		// X into believing we're not using a browser automation tool.
-		chromedp.Flag("disable-blink-features", "AutomationControlled"),
-	)
+	// Create a visible (headful) browser context with anti-bot-detection
+	opts := browser.Options(false) // headful for login
+	opts = append(opts, chromedp.Flag("start-maximized", true))
 
 	allocCtx, cancel := chromedp.NewExecAllocator(ctx, opts...)
 	defer cancel()

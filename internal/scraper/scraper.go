@@ -9,6 +9,8 @@ import (
 
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
+
+	"github.com/ibeckermayer/scroll4me/internal/browser"
 	"github.com/ibeckermayer/scroll4me/internal/types"
 )
 
@@ -24,11 +26,8 @@ func New(headless bool) *Scraper {
 
 // ScrapeForYou fetches posts from the For You feed
 func (s *Scraper) ScrapeForYou(ctx context.Context, cookies []*network.Cookie, count int) ([]types.Post, error) {
-	// Create browser context with options
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", s.headless),
-		chromedp.Flag("disable-gpu", true),
-	)
+	// Create browser context with anti-bot-detection options
+	opts := browser.Options(s.headless)
 
 	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
 	defer allocCancel()
@@ -302,11 +301,8 @@ func (s *Scraper) scroll(ctx context.Context) error {
 
 // ScrapeThread fetches replies for a specific post (for context enrichment)
 func (s *Scraper) ScrapeThread(ctx context.Context, cookies []*network.Cookie, postURL string, replyCount int) ([]types.Post, error) {
-	// Create browser context with options
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", s.headless),
-		chromedp.Flag("disable-gpu", true),
-	)
+	// Create browser context with anti-bot-detection options
+	opts := browser.Options(s.headless)
 
 	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
 	defer allocCancel()
