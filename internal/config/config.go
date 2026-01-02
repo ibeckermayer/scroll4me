@@ -136,5 +136,6 @@ func (c *Config) Save() error {
 	defer f.Close()
 
 	encoder := toml.NewEncoder(f)
+	encoder.Indent = ""
 	return encoder.Encode(c)
 }
