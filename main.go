@@ -7,7 +7,6 @@ import (
 	"github.com/getlantern/systray"
 
 	"github.com/ibeckermayer/scroll4me/internal/analyzer"
-	"github.com/ibeckermayer/scroll4me/internal/analyzer/providers"
 	"github.com/ibeckermayer/scroll4me/internal/app"
 	"github.com/ibeckermayer/scroll4me/internal/auth"
 	"github.com/ibeckermayer/scroll4me/internal/config"
@@ -48,8 +47,10 @@ func main() {
 	postScraper := scraper.New(cfg.Scraping.Headless, cfg.Scraping.DebugPauseAfterScrape)
 
 	// Initialize analyzer
-	provider := providers.NewClaudeProvider(cfg.Analysis.APIKey, cfg.Analysis.Model)
-	postAnalyzer := analyzer.New(provider, cfg.Interests, cfg.Analysis.BatchSize)
+	postAnalyzer, err := analyzer.New(cfg.Analysis, cfg.Interests)
+	if err != nil {
+		log.Fatalf("Failed to initialize analyzer: %v", err)
+	}
 
 	// Create app
 	a := app.New(cfg, authManager, postScraper, postAnalyzer)

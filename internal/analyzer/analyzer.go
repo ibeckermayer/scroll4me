@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/ibeckermayer/scroll4me/internal/analyzer/providers"
 	"github.com/ibeckermayer/scroll4me/internal/config"
 	"github.com/ibeckermayer/scroll4me/internal/types"
 )
@@ -20,13 +21,24 @@ type Analyzer struct {
 	batchSize int
 }
 
-// New creates a new analyzer with the given provider
-func New(provider Provider, interests config.InterestsConfig, batchSize int) *Analyzer {
+// New creates a new analyzer with the appropriate provider based on config
+func New(analysisConfig config.AnalysisConfig, interests config.InterestsConfig) (*Analyzer, error) {
+	var provider Provider
+
+	switch analysisConfig.LLMProvider {
+	case config.ProviderAnthropic:
+		provider = providers.NewAnthropicProvider(analysisConfig.APIKey, analysisConfig.Model)
+	// case config.ProviderOpenAI:
+	// 	provider = providers.NewOpenAIProvider(analysisConfig.APIKey, analysisConfig.Model)
+	default:
+		return nil, fmt.Errorf("unknown LLM provider: %s", analysisConfig.LLMProvider)
+	}
+
 	return &Analyzer{
 		provider:  provider,
 		interests: interests,
-		batchSize: batchSize,
-	}
+		batchSize: analysisConfig.BatchSize,
+	}, nil
 }
 
 // AnalyzePosts processes posts through the LLM for relevance scoring

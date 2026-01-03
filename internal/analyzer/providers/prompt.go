@@ -1,4 +1,4 @@
-package analyzer
+package providers
 
 import (
 	"fmt"
@@ -8,8 +8,8 @@ import (
 	"github.com/ibeckermayer/scroll4me/internal/types"
 )
 
-// BuildPrompt constructs the LLM prompt for analyzing posts
-func BuildPrompt(posts []types.Post, interests config.InterestsConfig) string {
+// buildPrompt constructs the LLM prompt for analyzing posts
+func buildPrompt(posts []types.Post, interests config.InterestsConfig) string {
 	var sb strings.Builder
 
 	sb.WriteString("You are analyzing social media posts for relevance to a user's interests.\n\n")

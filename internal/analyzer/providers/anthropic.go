@@ -4,30 +4,33 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"regexp"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
-	"github.com/ibeckermayer/scroll4me/internal/analyzer"
 	"github.com/ibeckermayer/scroll4me/internal/config"
+	"github.com/ibeckermayer/scroll4me/internal/store"
 	"github.com/ibeckermayer/scroll4me/internal/types"
 )
 
-// ClaudeProvider implements the Provider interface using Claude API
-type ClaudeProvider struct {
-	client *anthropic.Client
-	model  string
+// AnthropicProvider implements the Provider interface using Anthropic's Claude API
+type AnthropicProvider struct {
+	client   *anthropic.Client
+	provider string // e.g. "anthropic"
+	model    string
 }
 
-// NewClaudeProvider creates a new Claude provider
-func NewClaudeProvider(apiKey, model string) *ClaudeProvider {
+// NewAnthropicProvider creates a new Anthropic provider
+func NewAnthropicProvider(apiKey, model string) *AnthropicProvider {
 	client := anthropic.NewClient(
 		option.WithAPIKey(apiKey),
 	)
-	return &ClaudeProvider{
-		client: &client,
-		model:  model,
+	return &AnthropicProvider{
+		client:   &client,
+		provider: config.ProviderAnthropic,
+		model:    model,
 	}
 }
 
@@ -41,8 +44,8 @@ type analysisResponse struct {
 }
 
 // Analyze sends posts to Claude for relevance analysis
-func (c *ClaudeProvider) Analyze(ctx context.Context, posts []types.Post, interests config.InterestsConfig) ([]types.Analysis, error) {
-	prompt := analyzer.BuildPrompt(posts, interests)
+func (c *AnthropicProvider) Analyze(ctx context.Context, posts []types.Post, interests config.InterestsConfig) ([]types.Analysis, error) {
+	prompt := buildPrompt(posts, interests)
 
 	message, err := c.client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     anthropic.Model(c.model),
@@ -62,6 +65,19 @@ func (c *ClaudeProvider) Analyze(ctx context.Context, posts []types.Post, intere
 			responseText = block.Text
 			break
 		}
+	}
+
+	// Cache the prompt/response for debugging
+	if cachePath, err := store.SaveLLMExchange(store.LLMExchange{
+		Timestamp: time.Now(),
+		Provider:  c.provider,
+		Model:     c.model,
+		Prompt:    prompt,
+		Response:  responseText,
+	}); err != nil {
+		log.Printf("Failed to cache LLM exchange: %v", err)
+	} else {
+		log.Printf("Cached LLM exchange to: %s", cachePath)
 	}
 
 	if responseText == "" {

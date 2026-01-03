@@ -44,6 +44,12 @@ type DigestConfig struct {
 	IncludeContext bool   `toml:"include_context"`
 }
 
+// LLM Provider constants
+const (
+	ProviderAnthropic = "anthropic"
+	// ProviderOpenAI = "openai" // TODO: future support
+)
+
 // Default returns a Config with sensible defaults
 func Default() *Config {
 	outputDir, _ := DefaultDigestDir()
@@ -61,7 +67,7 @@ func Default() *Config {
 			DebugPauseAfterScrape: false,
 		},
 		Analysis: AnalysisConfig{
-			LLMProvider:        "claude",
+			LLMProvider:        ProviderAnthropic,
 			Model:              string(anthropic.ModelClaudeSonnet4_5_20250929),
 			APIKey:             "<replace with your API key>",
 			RelevanceThreshold: 0.6,

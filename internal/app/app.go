@@ -8,7 +8,6 @@ import (
 	"github.com/pkg/browser"
 
 	"github.com/ibeckermayer/scroll4me/internal/analyzer"
-	"github.com/ibeckermayer/scroll4me/internal/analyzer/providers"
 	"github.com/ibeckermayer/scroll4me/internal/auth"
 	"github.com/ibeckermayer/scroll4me/internal/config"
 	"github.com/ibeckermayer/scroll4me/internal/digest"
@@ -213,8 +212,10 @@ func (a *App) ReloadConfig() error {
 	}
 
 	// Recreate analyzer with new config
-	provider := providers.NewClaudeProvider(cfg.Analysis.APIKey, cfg.Analysis.Model)
-	newAnalyzer := analyzer.New(provider, cfg.Interests, cfg.Analysis.BatchSize)
+	newAnalyzer, err := analyzer.New(cfg.Analysis, cfg.Interests)
+	if err != nil {
+		return err
+	}
 
 	a.mu.Lock()
 	a.config = cfg
