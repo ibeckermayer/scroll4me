@@ -2,10 +2,8 @@ package providers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
-	"regexp"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -34,24 +32,17 @@ func NewAnthropicProvider(apiKey, model string) *AnthropicProvider {
 	}
 }
 
-// analysisResponse represents the expected JSON response from Claude
-type analysisResponse struct {
-	PostID         string   `json:"post_id"`
-	RelevanceScore float64  `json:"relevance_score"`
-	Topics         []string `json:"topics"`
-	Summary        string   `json:"summary"`
-	NeedsContext   bool     `json:"needs_context"`
-}
-
 // Analyze sends posts to Claude for relevance analysis
 func (c *AnthropicProvider) Analyze(ctx context.Context, posts []types.Post, interests config.InterestsConfig) ([]types.Analysis, error) {
 	prompt := buildPrompt(posts, interests)
 
+	// Use prefilling to ensure Claude continues with valid JSON (starting after the "[")
 	message, err := c.client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     anthropic.Model(c.model),
 		MaxTokens: 4096,
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
+			anthropic.NewAssistantMessage(anthropic.NewTextBlock("[")),
 		},
 	})
 	if err != nil {
@@ -84,51 +75,7 @@ func (c *AnthropicProvider) Analyze(ctx context.Context, posts []types.Post, int
 		return nil, fmt.Errorf("Claude returned empty response")
 	}
 
-	return parseResponse(responseText)
-}
-
-// parseResponse extracts analyses from Claude's JSON response
-func parseResponse(responseText string) ([]types.Analysis, error) {
-	// Claude may wrap the JSON in markdown code blocks, so we need to extract it
-	jsonText := extractJSON(responseText)
-
-	var responses []analysisResponse
-	if err := json.Unmarshal([]byte(jsonText), &responses); err != nil {
-		return nil, fmt.Errorf("failed to parse response JSON: %w (response was: %s)", err, responseText)
-	}
-
-	now := time.Now()
-	analyses := make([]types.Analysis, len(responses))
-	for i, r := range responses {
-		analyses[i] = types.Analysis{
-			PostID:         r.PostID,
-			RelevanceScore: r.RelevanceScore,
-			Topics:         r.Topics,
-			Summary:        r.Summary,
-			NeedsContext:   r.NeedsContext,
-			AnalyzedAt:     now,
-		}
-	}
-
-	return analyses, nil
-}
-
-// extractJSON attempts to extract JSON from Claude's response, handling markdown code blocks
-func extractJSON(text string) string {
-	// Try to extract JSON from markdown code block
-	re := regexp.MustCompile(`(?s)` + "```" + `(?:json)?\s*\n?(\[.*?\])\s*\n?` + "```")
-	matches := re.FindStringSubmatch(text)
-	if len(matches) > 1 {
-		return matches[1]
-	}
-
-	// If no code block, try to find raw JSON array
-	re = regexp.MustCompile(`(?s)(\[.*\])`)
-	matches = re.FindStringSubmatch(text)
-	if len(matches) > 1 {
-		return matches[1]
-	}
-
-	// Return original text as fallback
-	return text
+	// Prepend "[" since we used prefilling - the response continues from after the "["
+	fullJSON := "[" + responseText
+	return ParseAnalysisResponse([]byte(fullJSON))
 }

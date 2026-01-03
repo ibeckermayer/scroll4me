@@ -1,12 +1,47 @@
 package providers
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/ibeckermayer/scroll4me/internal/config"
 	"github.com/ibeckermayer/scroll4me/internal/types"
 )
+
+// AnalysisResult represents the expected JSON structure from any LLM provider
+type AnalysisResult struct {
+	PostID         string   `json:"post_id"`
+	RelevanceScore float64  `json:"relevance_score"`
+	Topics         []string `json:"topics"`
+	Summary        string   `json:"summary"`
+	NeedsContext   bool     `json:"needs_context"`
+}
+
+// ParseAnalysisResponse parses raw JSON bytes from an LLM provider into Analysis objects.
+// Each provider is responsible for assembling the complete JSON before calling this.
+func ParseAnalysisResponse(jsonBytes []byte) ([]types.Analysis, error) {
+	var results []AnalysisResult
+	if err := json.Unmarshal(jsonBytes, &results); err != nil {
+		return nil, fmt.Errorf("failed to parse analysis JSON: %w (response was: %.500s)", err, string(jsonBytes))
+	}
+
+	now := time.Now()
+	analyses := make([]types.Analysis, len(results))
+	for i, r := range results {
+		analyses[i] = types.Analysis{
+			PostID:         r.PostID,
+			RelevanceScore: r.RelevanceScore,
+			Topics:         r.Topics,
+			Summary:        r.Summary,
+			NeedsContext:   r.NeedsContext,
+			AnalyzedAt:     now,
+		}
+	}
+
+	return analyses, nil
+}
 
 // buildPrompt constructs the LLM prompt for analyzing posts
 func buildPrompt(posts []types.Post, interests config.InterestsConfig) string {
@@ -54,18 +89,10 @@ func buildPrompt(posts []types.Post, interests config.InterestsConfig) string {
 	sb.WriteString("3. summary (string): One sentence summary\n")
 	sb.WriteString("4. needs_context (boolean): Should we fetch replies for more context?\n\n")
 
-	sb.WriteString("Respond with a JSON array in this exact format:\n")
-	sb.WriteString("```json\n")
-	sb.WriteString("[\n")
-	sb.WriteString("  {\n")
-	sb.WriteString("    \"post_id\": \"...\",\n")
-	sb.WriteString("    \"relevance_score\": 0.85,\n")
-	sb.WriteString("    \"topics\": [\"AI\", \"tech\"],\n")
-	sb.WriteString("    \"summary\": \"Discussion about...\",\n")
-	sb.WriteString("    \"needs_context\": false\n")
-	sb.WriteString("  }\n")
-	sb.WriteString("]\n")
-	sb.WriteString("```\n")
+	sb.WriteString("IMPORTANT: Respond with ONLY a valid JSON array. No markdown, no code blocks, no explanation - just the raw JSON starting with [ and ending with ].\n\n")
+	sb.WriteString("Example structure:\n")
+	sb.WriteString(`[{"post_id": "...", "relevance_score": 0.85, "topics": ["AI", "tech"], "summary": "Discussion about...", "needs_context": false}]`)
+	sb.WriteString("\n")
 
 	return sb.String()
 }
