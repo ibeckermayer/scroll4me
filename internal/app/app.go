@@ -13,6 +13,7 @@ import (
 	"github.com/ibeckermayer/scroll4me/internal/config"
 	"github.com/ibeckermayer/scroll4me/internal/digest"
 	"github.com/ibeckermayer/scroll4me/internal/scraper"
+	"github.com/ibeckermayer/scroll4me/internal/store"
 	"github.com/ibeckermayer/scroll4me/internal/types"
 )
 
@@ -110,6 +111,13 @@ func (a *App) GenerateDigest() error {
 		return err
 	}
 	log.Printf("Scraped %d posts", len(posts))
+
+	// Save posts to cache for debugging
+	if cachePath, err := store.SavePosts(posts); err != nil {
+		log.Printf("Failed to cache posts: %v", err)
+	} else {
+		log.Printf("Cached posts to: %s", cachePath)
+	}
 
 	if len(posts) == 0 {
 		log.Println("No posts scraped - nothing to analyze")

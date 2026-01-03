@@ -82,6 +82,16 @@ func ConfigDir() (string, error) {
 	return filepath.Join(configDir, "scroll4me"), nil
 }
 
+// CacheDir returns the platform-appropriate cache directory.
+// On macOS this is ~/Library/Caches/scroll4me/
+func CacheDir() (string, error) {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(cacheDir, "scroll4me"), nil
+}
+
 // DefaultDigestDir returns the default digest output directory
 func DefaultDigestDir() (string, error) {
 	dir, err := ConfigDir()
