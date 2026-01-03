@@ -45,7 +45,7 @@ func main() {
 	authManager := auth.NewManager(cookieStore)
 
 	// Initialize scraper
-	postScraper := scraper.New(cfg.Scraping.Headless)
+	postScraper := scraper.New(cfg.Scraping.Headless, cfg.Scraping.DebugPauseAfterScrape)
 
 	// Initialize analyzer
 	provider := providers.NewClaudeProvider(cfg.Analysis.APIKey, cfg.Analysis.Model)

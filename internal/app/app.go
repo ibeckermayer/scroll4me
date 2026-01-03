@@ -211,7 +211,7 @@ func (a *App) ReloadConfig() error {
 	a.mu.Lock()
 	a.config = cfg
 	a.analyzer = newAnalyzer
-	a.scraper = scraper.New(cfg.Scraping.Headless)
+	a.scraper = scraper.New(cfg.Scraping.Headless, cfg.Scraping.DebugPauseAfterScrape)
 	a.mu.Unlock()
 
 	log.Println("Configuration reloaded")

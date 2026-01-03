@@ -24,8 +24,9 @@ type InterestsConfig struct {
 }
 
 type ScrapingConfig struct {
-	PostsPerScrape int  `toml:"posts_per_scrape"`
-	Headless       bool `toml:"headless"`
+	PostsPerScrape        int  `toml:"posts_per_scrape"`
+	Headless              bool `toml:"headless"`
+	DebugPauseAfterScrape bool `toml:"debug_pause_after_scrape"`
 }
 
 type AnalysisConfig struct {
@@ -54,8 +55,9 @@ func Default() *Config {
 			MutedKeywords:    []string{},
 		},
 		Scraping: ScrapingConfig{
-			PostsPerScrape: 100,
-			Headless:       true,
+			PostsPerScrape:        100,
+			Headless:              true,
+			DebugPauseAfterScrape: false,
 		},
 		Analysis: AnalysisConfig{
 			LLMProvider:        "claude",

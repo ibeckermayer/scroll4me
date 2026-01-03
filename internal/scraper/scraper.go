@@ -3,6 +3,7 @@ package scraper
 import (
 	"context"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -17,15 +18,21 @@ import (
 // Scraper handles extracting posts from X.com
 type Scraper struct {
 	headless bool
+	// If true and not in headless mode, will pause after scraping and
+	// wait for the browser to close before continuing. This is useful
+	// for debugging the scrape process.
+	debugPauseAfterScrape bool
 }
 
 // New creates a new scraper
-func New(headless bool) *Scraper {
-	return &Scraper{headless: headless}
+func New(headless bool, debugPauseAfterScrape bool) *Scraper {
+	return &Scraper{headless: headless, debugPauseAfterScrape: debugPauseAfterScrape}
 }
 
 // ScrapeForYou fetches posts from the For You feed
 func (s *Scraper) ScrapeForYou(ctx context.Context, cookies []*network.Cookie, count int) ([]types.Post, error) {
+	log.Printf("Starting scrape for %d posts (headless=%v, debugPauseAfterScrape=%v)", count, s.headless, s.debugPauseAfterScrape)
+
 	// Create browser context with anti-bot-detection options
 	opts := browser.Options(s.headless)
 
@@ -36,24 +43,37 @@ func (s *Scraper) ScrapeForYou(ctx context.Context, cookies []*network.Cookie, c
 	defer browserCancel()
 
 	// Set timeout for the entire scrape operation
-	browserCtx, timeoutCancel := context.WithTimeout(browserCtx, 5*time.Minute)
+	timedBrowserCtx, timeoutCancel := context.WithTimeout(browserCtx, 5*time.Minute)
 	defer timeoutCancel()
 
 	// Inject cookies before navigation
-	if err := s.injectCookies(browserCtx, cookies); err != nil {
+	log.Printf("Injecting %d cookies...", len(cookies))
+	if err := s.injectCookies(timedBrowserCtx, cookies); err != nil {
 		return nil, fmt.Errorf("failed to inject cookies: %w", err)
 	}
 
 	// Navigate to home feed
-	if err := chromedp.Run(browserCtx,
+	log.Printf("Navigating to x.com/home...")
+	if err := chromedp.Run(timedBrowserCtx,
 		chromedp.Navigate("https://x.com/home"),
 		chromedp.WaitVisible(WaitForFeed, chromedp.ByQuery),
 	); err != nil {
 		return nil, fmt.Errorf("failed to load feed: %w", err)
 	}
+	log.Printf("Feed loaded, beginning extraction...")
 
 	// Scrape posts with scrolling
-	posts, err := s.extractPosts(browserCtx, count)
+	posts, err := s.extractPosts(timedBrowserCtx, count)
+	if s.debugPauseAfterScrape {
+		if s.headless {
+			log.Println("Skipping debug pause after scrape in headless mode")
+		} else {
+			log.Printf("Pausing for debug after scraping. extractPosts returned with error: %v", err)
+			fmt.Print("Press Enter to continue...")
+			fmt.Scanln()
+			log.Println("Continuing...")
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract posts: %w", err)
 	}
@@ -98,12 +118,17 @@ func (s *Scraper) extractPosts(ctx context.Context, count int) ([]types.Post, er
 		}
 
 		// Add unique posts
+		newUniqueCount := 0
 		for _, p := range newPosts {
 			if !seenIDs[p.ID] {
 				seenIDs[p.ID] = true
 				posts = append(posts, p)
+				newUniqueCount++
 			}
 		}
+
+		log.Printf("Scroll %d/%d: found %d visible, %d new unique (total: %d/%d)",
+			scrollAttempts+1, maxScrollAttempts, len(newPosts), newUniqueCount, len(posts), count)
 
 		// Scroll down
 		if err := s.scroll(ctx); err != nil {
@@ -120,6 +145,7 @@ func (s *Scraper) extractPosts(ctx context.Context, count int) ([]types.Post, er
 		posts = posts[:count]
 	}
 
+	log.Printf("Extraction complete: %d posts collected", len(posts))
 	return posts, nil
 }
 
@@ -301,6 +327,8 @@ func (s *Scraper) scroll(ctx context.Context) error {
 
 // ScrapeThread fetches replies for a specific post (for context enrichment)
 func (s *Scraper) ScrapeThread(ctx context.Context, cookies []*network.Cookie, postURL string, replyCount int) ([]types.Post, error) {
+	log.Printf("Starting thread scrape for %d replies: %s", replyCount, postURL)
+
 	// Create browser context with anti-bot-detection options
 	opts := browser.Options(s.headless)
 
@@ -315,19 +343,23 @@ func (s *Scraper) ScrapeThread(ctx context.Context, cookies []*network.Cookie, p
 	defer timeoutCancel()
 
 	// Inject cookies before navigation
+	log.Printf("Injecting %d cookies...", len(cookies))
 	if err := s.injectCookies(browserCtx, cookies); err != nil {
 		return nil, fmt.Errorf("failed to inject cookies: %w", err)
 	}
 
 	// Navigate to the post URL
+	log.Printf("Navigating to thread...")
 	if err := chromedp.Run(browserCtx,
 		chromedp.Navigate(postURL),
 		chromedp.WaitVisible(`article[data-testid="tweet"]`, chromedp.ByQuery),
 	); err != nil {
 		return nil, fmt.Errorf("failed to load post: %w", err)
 	}
+	log.Printf("Thread loaded, waiting for replies...")
 
 	// Wait a bit for replies to load
+	// TODO: Find a more reliable way to wait for replies to load
 	time.Sleep(2 * time.Second)
 
 	// Extract replies (skip the first tweet which is the main post)
@@ -336,6 +368,7 @@ func (s *Scraper) ScrapeThread(ctx context.Context, cookies []*network.Cookie, p
 		return nil, fmt.Errorf("failed to extract replies: %w", err)
 	}
 
+	log.Printf("Thread scrape complete: %d replies collected", len(replies))
 	return replies, nil
 }
 
@@ -354,12 +387,17 @@ func (s *Scraper) extractReplies(ctx context.Context, count int) ([]types.Post, 
 		}
 
 		// Add unique replies
+		newUniqueCount := 0
 		for _, r := range newReplies {
 			if !seenIDs[r.ID] {
 				seenIDs[r.ID] = true
 				replies = append(replies, r)
+				newUniqueCount++
 			}
 		}
+
+		log.Printf("Reply scroll %d/%d: found %d visible, %d new unique (total: %d/%d)",
+			scrollAttempts+1, maxScrollAttempts, len(newReplies), newUniqueCount, len(replies), count)
 
 		// Scroll down
 		if err := s.scroll(ctx); err != nil {
