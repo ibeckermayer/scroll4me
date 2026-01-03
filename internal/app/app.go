@@ -112,16 +112,16 @@ func (a *App) GenerateDigest() error {
 	}
 	log.Printf("Scraped %d posts", len(posts))
 
+	if len(posts) == 0 {
+		log.Println("No posts scraped - nothing to analyze")
+		return nil
+	}
+
 	// Save posts to cache for debugging
 	if cachePath, err := store.SavePosts(posts); err != nil {
 		log.Printf("Failed to cache posts: %v", err)
 	} else {
 		log.Printf("Cached posts to: %s", cachePath)
-	}
-
-	if len(posts) == 0 {
-		log.Println("No posts scraped - nothing to analyze")
-		return nil
 	}
 
 	// Step 2: Analyze posts with LLM
