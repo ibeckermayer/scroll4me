@@ -25,15 +25,22 @@ func New(outputDir string, maxPosts int) *Builder {
 	}
 }
 
-// Digest represents a generated digest
+// Content holds the rendered digest content (pure data, no side effects).
+type Content struct {
+	Markdown  string
+	PostCount int
+	CreatedAt time.Time
+}
+
+// Digest represents a saved digest file.
 type Digest struct {
 	FilePath  string
 	PostCount int
 	CreatedAt time.Time
 }
 
-// Build creates a markdown digest from analyzed posts and saves it to disk
-func (b *Builder) Build(posts []types.PostWithAnalysis, totalScraped int) (*Digest, error) {
+// Render generates markdown content from analyzed posts without writing to disk.
+func (b *Builder) Render(posts []types.PostWithAnalysis, totalScraped int) (*Content, error) {
 	if len(posts) == 0 {
 		return nil, fmt.Errorf("no posts to include in digest")
 	}
@@ -54,29 +61,48 @@ func (b *Builder) Build(posts []types.PostWithAnalysis, totalScraped int) (*Dige
 		posts = posts[:b.maxPosts]
 	}
 
-	// Build markdown content
 	now := time.Now()
 	markdown := b.buildMarkdown(posts, now, totalScraped)
 
+	return &Content{
+		Markdown:  markdown,
+		PostCount: len(posts),
+		CreatedAt: now,
+	}, nil
+}
+
+// Save writes the digest content to the user-configured output directory.
+// Returns the saved Digest with file path.
+func (b *Builder) Save(content *Content) (*Digest, error) {
 	// Ensure output directory exists
 	if err := os.MkdirAll(b.outputDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create output directory: %w", err)
 	}
 
 	// Generate filename
-	filename := fmt.Sprintf("%s-digest.md", now.Format("2006-01-02-150405"))
+	filename := fmt.Sprintf("%s-digest.md", content.CreatedAt.Format("2006-01-02-150405"))
 	filePath := filepath.Join(b.outputDir, filename)
 
 	// Write file
-	if err := os.WriteFile(filePath, []byte(markdown), 0644); err != nil {
+	if err := os.WriteFile(filePath, []byte(content.Markdown), 0644); err != nil {
 		return nil, fmt.Errorf("failed to write digest file: %w", err)
 	}
 
 	return &Digest{
 		FilePath:  filePath,
-		PostCount: len(posts),
-		CreatedAt: now,
+		PostCount: content.PostCount,
+		CreatedAt: content.CreatedAt,
 	}, nil
+}
+
+// Build creates a markdown digest from analyzed posts and saves it to disk.
+// This is a convenience method that calls Render + Save.
+func (b *Builder) Build(posts []types.PostWithAnalysis, totalScraped int) (*Digest, error) {
+	content, err := b.Render(posts, totalScraped)
+	if err != nil {
+		return nil, err
+	}
+	return b.Save(content)
 }
 
 // buildMarkdown generates the markdown content

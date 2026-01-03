@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -10,11 +11,19 @@ import (
 	"github.com/chromedp/chromedp"
 	"github.com/pkg/browser"
 
+	"github.com/ibeckermayer/scroll4me/internal/analyzer"
+	"github.com/ibeckermayer/scroll4me/internal/app"
+	"github.com/ibeckermayer/scroll4me/internal/auth"
 	browseropts "github.com/ibeckermayer/scroll4me/internal/browser"
 	"github.com/ibeckermayer/scroll4me/internal/config"
+	"github.com/ibeckermayer/scroll4me/internal/scraper"
+	"github.com/ibeckermayer/scroll4me/internal/store"
+	"github.com/ibeckermayer/scroll4me/internal/types"
 )
 
 func main() {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(1)
@@ -23,13 +32,14 @@ func main() {
 	switch os.Args[1] {
 	case "bot-test":
 		runBotTest()
-		os.Exit(0)
 	case "open":
 		if len(os.Args) < 3 {
 			fmt.Println("Usage: s4m open <config|cache>")
 			os.Exit(1)
 		}
 		runOpen(os.Args[2])
+	case "analyze":
+		runAnalyze(os.Args[2:])
 	default:
 		printUsage()
 		os.Exit(1)
@@ -40,9 +50,12 @@ func printUsage() {
 	fmt.Println("Usage: s4m <command>")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  bot-test       Open bot.sannysoft.com to audit browser fingerprint")
-	fmt.Println("  open config   Open config file in default editor")
-	fmt.Println("  open cache    Open cache directory in file explorer")
+	fmt.Println("  bot-test        Open bot.sannysoft.com to audit browser fingerprint")
+	fmt.Println("  open config     Open config file in default editor")
+	fmt.Println("  open cache      Open cache directory in file explorer")
+	fmt.Println("  analyze         Run steps 2-5 (analyze, filter, context, digest) on cached or specified posts")
+	fmt.Println()
+	fmt.Println("Run 's4m <command> -h' for more information on a command.")
 }
 
 func runBotTest() {
@@ -92,4 +105,133 @@ func runOpen(target string) {
 	if err := browser.OpenFile(path); err != nil {
 		log.Fatalf("Failed to open: %v", err)
 	}
+}
+
+func runAnalyze(args []string) {
+	fs := flag.NewFlagSet("analyze", flag.ExitOnError)
+	filePath := fs.String("file", "", "Path to posts JSON file (default: latest from cache)")
+	skipContext := fs.Bool("skip-context", false, "Skip fetching context/replies (step 4)")
+	noOpen := fs.Bool("no-open", false, "Don't open the digest after generating")
+
+	fs.Usage = func() {
+		fmt.Println("Usage: s4m analyze [options]")
+		fmt.Println()
+		fmt.Println("Run steps 2-5 on cached or specified posts:")
+		fmt.Println("  2. Analyze posts with LLM")
+		fmt.Println("  3. Filter by relevance threshold")
+		fmt.Println("  4. Fetch context/replies (unless --skip-context)")
+		fmt.Println("  5. Build and save digest")
+		fmt.Println()
+		fmt.Println("Options:")
+		fs.PrintDefaults()
+	}
+
+	if err := fs.Parse(args); err != nil {
+		os.Exit(1)
+	}
+
+	// Load posts from file or cache
+	var posts []types.Post
+	var postsPath string
+
+	if *filePath != "" {
+		log.Printf("Loading posts from: %s", *filePath)
+		var err error
+		posts, err = store.LoadStepOutput[[]types.Post](*filePath)
+		if err != nil {
+			log.Fatalf("Failed to load posts from %s: %v", *filePath, err)
+		}
+		postsPath = *filePath
+	} else {
+		log.Println("Loading latest posts from cache...")
+		var err error
+		posts, postsPath, err = store.LoadLatestStepOutput[[]types.Post](store.Step1Posts)
+		if err != nil {
+			log.Fatalf("Failed to load latest posts: %v", err)
+		}
+	}
+	log.Printf("Loaded %d posts from: %s", len(posts), postsPath)
+
+	if len(posts) == 0 {
+		log.Println("No posts to analyze")
+		return
+	}
+
+	// Initialize app
+	a, err := initApp()
+	if err != nil {
+		log.Fatalf("Failed to initialize app: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Step 2: Analyze posts with LLM
+	analyses, err := a.AnalyzePosts(ctx, posts)
+	if err != nil {
+		log.Fatalf("Analysis failed: %v", err)
+	}
+
+	// Step 3: Filter by relevance threshold
+	relevantPosts := a.FilterByRelevance(posts, analyses)
+	if len(relevantPosts) == 0 {
+		log.Println("No posts above relevance threshold - no digest generated")
+		return
+	}
+
+	// Step 4: Fetch context (unless skipped)
+	var postsWithContext []types.PostWithAnalysis
+	if *skipContext {
+		log.Println("Skipping context fetch (--skip-context)")
+		postsWithContext = relevantPosts
+	} else {
+		postsWithContext, err = a.FetchContext(ctx, relevantPosts)
+		if err != nil {
+			log.Printf("Failed to fetch context: %v", err)
+			postsWithContext = relevantPosts
+		}
+	}
+
+	// Step 5: Build and save digest
+	digestPath, err := a.BuildDigest(postsWithContext, len(posts))
+	if err != nil {
+		log.Fatalf("Failed to build digest: %v", err)
+	}
+
+	// Open digest unless --no-open
+	if !*noOpen {
+		if err := browser.OpenFile(digestPath); err != nil {
+			log.Printf("Failed to open digest: %v", err)
+		}
+	}
+}
+
+// initApp initializes the App with config and dependencies for CLI use.
+func initApp() (*app.App, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		if os.IsNotExist(err) {
+			cfg = config.Default()
+		} else {
+			return nil, fmt.Errorf("failed to load config: %w", err)
+		}
+	}
+
+	// Initialize cookie store and auth manager
+	cookieStorePath, err := auth.DefaultCookieStorePath()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get cookie store path: %w", err)
+	}
+	cookieStore := auth.NewCookieStore(cookieStorePath)
+	authManager := auth.NewManager(cookieStore)
+
+	// Initialize scraper (headless for CLI)
+	postScraper := scraper.New(true, false)
+
+	// Initialize analyzer
+	postAnalyzer, err := analyzer.New(cfg.Analysis, cfg.Interests)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize analyzer: %w", err)
+	}
+
+	return app.New(cfg, authManager, postScraper, postAnalyzer), nil
 }
