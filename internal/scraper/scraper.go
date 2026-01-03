@@ -115,7 +115,7 @@ func (s *Scraper) ScrapeForYou(ctx context.Context, cookies []*network.Cookie, c
 	log.Printf("Navigating to x.com/home...")
 	if err := chromedp.Run(timedBrowserCtx,
 		chromedp.Navigate("https://x.com/home"),
-		chromedp.WaitVisible(WaitForFeed, chromedp.ByQuery),
+		chromedp.WaitVisible(WaitForTweets, chromedp.ByQuery),
 	); err != nil {
 		return nil, fmt.Errorf("failed to load feed: %w", err)
 	}
@@ -383,7 +383,7 @@ func (s *Scraper) ScrapeThread(ctx context.Context, cookies []*network.Cookie, p
 	log.Printf("Navigating to thread...")
 	if err := chromedp.Run(browserCtx,
 		chromedp.Navigate(postURL),
-		chromedp.WaitVisible(`article[data-testid="tweet"]`, chromedp.ByQuery),
+		chromedp.WaitVisible(WaitForTweets, chromedp.ByQuery),
 	); err != nil {
 		return nil, fmt.Errorf("failed to load post: %w", err)
 	}
