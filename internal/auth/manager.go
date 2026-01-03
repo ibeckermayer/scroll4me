@@ -32,7 +32,6 @@ func (m *Manager) IsAuthenticated() bool {
 func (m *Manager) Login(ctx context.Context) error {
 	// Create a visible (headful) browser context with anti-bot-detection
 	opts := browser.Options(false) // headful for login
-	opts = append(opts, chromedp.Flag("start-maximized", true))
 
 	allocCtx, cancel := chromedp.NewExecAllocator(ctx, opts...)
 	defer cancel()

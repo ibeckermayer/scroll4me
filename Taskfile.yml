@@ -19,3 +19,8 @@ tasks:
     desc: Clean build artifacts
     cmds:
       - rm -rf {{.BIN_DIR}}
+
+  bottest:
+    desc: Open bot.sannysoft.com to audit browser fingerprint
+    cmds:
+      - go run ./cmd/bottest
