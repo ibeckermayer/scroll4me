@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/BurntSushi/toml"
+	"github.com/anthropics/anthropic-sdk-go"
 )
 
 // Config holds all application configuration
@@ -61,7 +62,8 @@ func Default() *Config {
 		},
 		Analysis: AnalysisConfig{
 			LLMProvider:        "claude",
-			Model:              "claude-sonnet-4-20250514",
+			Model:              string(anthropic.ModelClaudeSonnet4_5_20250929),
+			APIKey:             "<replace with your API key>",
 			RelevanceThreshold: 0.6,
 			BatchSize:          10,
 		},

@@ -1,70 +1,34 @@
 package providers
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"regexp"
 	"time"
 
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/ibeckermayer/scroll4me/internal/analyzer"
 	"github.com/ibeckermayer/scroll4me/internal/config"
 	"github.com/ibeckermayer/scroll4me/internal/types"
 )
 
-const (
-	claudeAPIURL     = "https://api.anthropic.com/v1/messages"
-	anthropicVersion = "2023-06-01"
-)
-
 // ClaudeProvider implements the Provider interface using Claude API
 type ClaudeProvider struct {
-	apiKey string
+	client *anthropic.Client
 	model  string
-	client *http.Client
 }
 
 // NewClaudeProvider creates a new Claude provider
 func NewClaudeProvider(apiKey, model string) *ClaudeProvider {
+	client := anthropic.NewClient(
+		option.WithAPIKey(apiKey),
+	)
 	return &ClaudeProvider{
-		apiKey: apiKey,
+		client: &client,
 		model:  model,
-		client: &http.Client{
-			Timeout: 120 * time.Second, // LLM calls can be slow
-		},
 	}
-}
-
-// claudeRequest represents the request body for Claude API
-type claudeRequest struct {
-	Model     string          `json:"model"`
-	MaxTokens int             `json:"max_tokens"`
-	Messages  []claudeMessage `json:"messages"`
-}
-
-// claudeMessage represents a message in the Claude conversation
-type claudeMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-// claudeResponse represents the response from Claude API
-type claudeResponse struct {
-	Content []claudeContent `json:"content"`
-	Error   *claudeError    `json:"error,omitempty"`
-}
-
-type claudeContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-type claudeError struct {
-	Type    string `json:"type"`
-	Message string `json:"message"`
 }
 
 // analysisResponse represents the expected JSON response from Claude
@@ -80,66 +44,30 @@ type analysisResponse struct {
 func (c *ClaudeProvider) Analyze(ctx context.Context, posts []types.Post, interests config.InterestsConfig) ([]types.Analysis, error) {
 	prompt := analyzer.BuildPrompt(posts, interests)
 
-	// Build request
-	reqBody := claudeRequest{
-		Model:     c.model,
+	message, err := c.client.Messages.New(ctx, anthropic.MessageNewParams{
+		Model:     anthropic.Model(c.model),
 		MaxTokens: 4096,
-		Messages: []claudeMessage{
-			{Role: "user", Content: prompt},
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
 		},
-	}
-
-	jsonBody, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	// Create HTTP request
-	req, err := http.NewRequestWithContext(ctx, "POST", claudeAPIURL, bytes.NewReader(jsonBody))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", c.apiKey)
-	req.Header.Set("anthropic-version", anthropicVersion)
-
-	// Execute request
-	resp, err := c.client.Do(req)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to call Claude API: %w", err)
 	}
-	defer resp.Body.Close()
 
-	// Read response
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+	// Extract text from response
+	var responseText string
+	for _, block := range message.Content {
+		if block.Type == "text" {
+			responseText = block.Text
+			break
+		}
 	}
 
-	// Check for HTTP errors
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Claude API returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	// Parse response
-	var claudeResp claudeResponse
-	if err := json.Unmarshal(body, &claudeResp); err != nil {
-		return nil, fmt.Errorf("failed to parse Claude response: %w", err)
-	}
-
-	if claudeResp.Error != nil {
-		return nil, fmt.Errorf("Claude API error: %s - %s", claudeResp.Error.Type, claudeResp.Error.Message)
-	}
-
-	if len(claudeResp.Content) == 0 {
+	if responseText == "" {
 		return nil, fmt.Errorf("Claude returned empty response")
 	}
 
-	// Extract the text content
-	responseText := claudeResp.Content[0].Text
-
-	// Parse the JSON from Claude's response
 	return parseResponse(responseText)
 }
 
