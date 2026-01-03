@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/rand"
 	"strconv"
 	"strings"
 	"time"
@@ -27,6 +28,64 @@ type Scraper struct {
 // New creates a new scraper
 func New(headless bool, debugPauseAfterScrape bool) *Scraper {
 	return &Scraper{headless: headless, debugPauseAfterScrape: debugPauseAfterScrape}
+}
+
+// extractFunc is a function that extracts posts from the current view
+type extractFunc func(ctx context.Context) ([]types.Post, error)
+
+// scrollAndCollectParams configures the scroll-and-collect loop
+type scrollAndCollectParams struct {
+	maxCount          int
+	maxScrollAttempts int
+	extractor         extractFunc
+	logPrefix         string
+	baseDelayMs       int
+	delayIncrementMs  int
+}
+
+// scrollAndCollect is the common scroll-collect-dedupe loop used by extractPosts and extractReplies
+func (s *Scraper) scrollAndCollect(ctx context.Context, p scrollAndCollectParams) ([]types.Post, error) {
+	var posts []types.Post
+	seenIDs := make(map[string]bool)
+
+	for scrollAttempts := 0; scrollAttempts < p.maxScrollAttempts; scrollAttempts++ {
+		newPosts, err := p.extractor(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		// Add unique posts, break if we hit maxCount
+		newUniqueCount := 0
+		for _, post := range newPosts {
+			if !seenIDs[post.ID] {
+				seenIDs[post.ID] = true
+				posts = append(posts, post)
+				newUniqueCount++
+				if len(posts) >= p.maxCount {
+					break
+				}
+			}
+		}
+
+		log.Printf("%s %d/%d: found %d visible, %d new unique (total: %d/%d)",
+			p.logPrefix, scrollAttempts+1, p.maxScrollAttempts,
+			len(newPosts), newUniqueCount, len(posts), p.maxCount)
+
+		if len(posts) >= p.maxCount {
+			break
+		}
+
+		if err := s.scroll(ctx); err != nil {
+			return nil, err
+		}
+
+		// Randomized wait for human-like timing
+		jitter := rand.Intn(200)
+		wait := p.baseDelayMs + jitter + scrollAttempts*p.delayIncrementMs
+		time.Sleep(time.Duration(wait) * time.Millisecond)
+	}
+
+	return posts, nil
 }
 
 // ScrapeForYou fetches posts from the For You feed
@@ -105,44 +164,16 @@ func (s *Scraper) injectCookies(ctx context.Context, cookies []*network.Cookie) 
 
 // extractPosts scrolls and extracts posts from the feed
 func (s *Scraper) extractPosts(ctx context.Context, count int) ([]types.Post, error) {
-	var posts []types.Post
-	seenIDs := make(map[string]bool)
-	scrollAttempts := 0
-	maxScrollAttempts := count / 5 // Rough estimate: ~5 posts per scroll
-
-	for len(posts) < count && scrollAttempts < maxScrollAttempts {
-		// Extract visible posts
-		newPosts, err := s.extractVisiblePosts(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		// Add unique posts
-		newUniqueCount := 0
-		for _, p := range newPosts {
-			if !seenIDs[p.ID] {
-				seenIDs[p.ID] = true
-				posts = append(posts, p)
-				newUniqueCount++
-			}
-		}
-
-		log.Printf("Scroll %d/%d: found %d visible, %d new unique (total: %d/%d)",
-			scrollAttempts+1, maxScrollAttempts, len(newPosts), newUniqueCount, len(posts), count)
-
-		// Scroll down
-		if err := s.scroll(ctx); err != nil {
-			return nil, err
-		}
-
-		// Wait for new content to load
-		time.Sleep(time.Duration(500+scrollAttempts*100) * time.Millisecond)
-		scrollAttempts++
-	}
-
-	// Limit to requested count
-	if len(posts) > count {
-		posts = posts[:count]
+	posts, err := s.scrollAndCollect(ctx, scrollAndCollectParams{
+		maxCount:          count,
+		maxScrollAttempts: count / 5, // Rough estimate: ~5 posts per scroll
+		extractor:         s.extractVisiblePosts,
+		logPrefix:         "Scroll",
+		baseDelayMs:       500,
+		delayIncrementMs:  100,
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	log.Printf("Extraction complete: %d posts collected", len(posts))
@@ -374,47 +405,14 @@ func (s *Scraper) ScrapeThread(ctx context.Context, cookies []*network.Cookie, p
 
 // extractReplies extracts reply tweets from a thread page
 func (s *Scraper) extractReplies(ctx context.Context, count int) ([]types.Post, error) {
-	var replies []types.Post
-	seenIDs := make(map[string]bool)
-	scrollAttempts := 0
-	maxScrollAttempts := count/3 + 5 // Replies are often fewer per scroll
-
-	for len(replies) < count && scrollAttempts < maxScrollAttempts {
-		// Extract visible replies
-		newReplies, err := s.extractVisibleReplies(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		// Add unique replies
-		newUniqueCount := 0
-		for _, r := range newReplies {
-			if !seenIDs[r.ID] {
-				seenIDs[r.ID] = true
-				replies = append(replies, r)
-				newUniqueCount++
-			}
-		}
-
-		log.Printf("Reply scroll %d/%d: found %d visible, %d new unique (total: %d/%d)",
-			scrollAttempts+1, maxScrollAttempts, len(newReplies), newUniqueCount, len(replies), count)
-
-		// Scroll down
-		if err := s.scroll(ctx); err != nil {
-			return nil, err
-		}
-
-		// Wait for new content to load
-		time.Sleep(time.Duration(800+scrollAttempts*150) * time.Millisecond)
-		scrollAttempts++
-	}
-
-	// Limit to requested count
-	if len(replies) > count {
-		replies = replies[:count]
-	}
-
-	return replies, nil
+	return s.scrollAndCollect(ctx, scrollAndCollectParams{
+		maxCount:          count,
+		maxScrollAttempts: count/3 + 5, // Replies are often fewer per scroll
+		extractor:         s.extractVisibleReplies,
+		logPrefix:         "Reply scroll",
+		baseDelayMs:       800,
+		delayIncrementMs:  150,
+	})
 }
 
 // extractVisibleReplies extracts reply tweets from the current view
