@@ -20,17 +20,7 @@ tasks:
     cmds:
       - rm -rf {{.BIN_DIR}}
 
-  bot-test:
-    desc: Open bot.sannysoft.com to audit browser fingerprint
+  s4m:
+    desc: Run dev CLI with any arguments (e.g., task s4m -- bot-test)
     cmds:
-      - go run ./cmd/s4m bot-test
-
-  open-config:
-    desc: Open config file in default editor
-    cmds:
-      - go run ./cmd/s4m open config
-
-  open-cache:
-    desc: Open cache directory in file explorer
-    cmds:
-      - go run ./cmd/s4m open cache
+      - go run ./cmd/s4m {{.CLI_ARGS}}

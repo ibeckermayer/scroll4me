@@ -40,6 +40,8 @@ func main() {
 		runOpen(os.Args[2])
 	case "analyze":
 		runAnalyze(os.Args[2:])
+	case "clear-cache":
+		runClearCache()
 	default:
 		printUsage()
 		os.Exit(1)
@@ -54,6 +56,7 @@ func printUsage() {
 	fmt.Println("  open config     Open config file in default editor")
 	fmt.Println("  open cache      Open cache directory in file explorer")
 	fmt.Println("  analyze         Run steps 2-4 (analyze, filter, digest) on cached or specified posts")
+	fmt.Println("  clear-cache     Clear all cached data")
 	fmt.Println()
 	fmt.Println("Run 's4m <command> -h' for more information on a command.")
 }
@@ -219,4 +222,22 @@ func initApp() (*app.App, error) {
 	}
 
 	return app.New(cfg, authManager, postScraper, postAnalyzer), nil
+}
+
+func runClearCache() {
+	cacheDir, err := config.CacheDir()
+	if err != nil {
+		log.Fatalf("Failed to get cache directory: %v", err)
+	}
+
+	if _, err := os.Stat(cacheDir); os.IsNotExist(err) {
+		log.Println("Cache directory doesn't exist - nothing to clear")
+		return
+	}
+
+	log.Printf("Clearing cache at: %s", cacheDir)
+	if err := os.RemoveAll(cacheDir); err != nil {
+		log.Fatalf("Failed to clear cache: %v", err)
+	}
+	log.Println("Cache cleared successfully")
 }
