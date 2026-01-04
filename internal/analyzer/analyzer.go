@@ -51,10 +51,7 @@ func (a *Analyzer) AnalyzePosts(ctx context.Context, posts []types.Post) ([]type
 
 	// Process in batches
 	for i := 0; i < len(posts); i += a.batchSize {
-		end := i + a.batchSize
-		if end > len(posts) {
-			end = len(posts)
-		}
+		end := min(i+a.batchSize, len(posts))
 
 		batch := posts[i:end]
 		analyses, err := a.provider.Analyze(ctx, batch, a.interests)

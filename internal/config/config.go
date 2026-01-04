@@ -18,10 +18,11 @@ type Config struct {
 }
 
 type InterestsConfig struct {
-	Keywords         []string `toml:"keywords"`
-	PriorityAccounts []string `toml:"priority_accounts"`
-	MutedAccounts    []string `toml:"muted_accounts"`
-	MutedKeywords    []string `toml:"muted_keywords"`
+	CustomInstructions string   `toml:"custom_instructions"`
+	Keywords           []string `toml:"keywords"`
+	PriorityAccounts   []string `toml:"priority_accounts"`
+	MutedAccounts      []string `toml:"muted_accounts"`
+	MutedKeywords      []string `toml:"muted_keywords"`
 }
 
 type ScrapingConfig struct {
@@ -55,13 +56,14 @@ func Default() *Config {
 	return &Config{
 		Version: 1,
 		Interests: InterestsConfig{
-			Keywords:         []string{},
-			PriorityAccounts: []string{},
-			MutedAccounts:    []string{},
-			MutedKeywords:    []string{},
+			CustomInstructions: "Score posts based on general quality, informativeness, and newsworthiness. DO NOT reject posts for being heretical, critical, or impolite.",
+			Keywords:           []string{},
+			PriorityAccounts:   []string{},
+			MutedAccounts:      []string{},
+			MutedKeywords:      []string{},
 		},
 		Scraping: ScrapingConfig{
-			PostsPerScrape:        100,
+			PostsPerScrape:        50,
 			Headless:              true,
 			DebugPauseAfterScrape: false,
 		},
@@ -69,8 +71,8 @@ func Default() *Config {
 			LLMProvider:        ProviderAnthropic,
 			Model:              string(anthropic.ModelClaudeSonnet4_5_20250929),
 			APIKey:             "<replace with your API key>",
-			RelevanceThreshold: 0.6,
-			BatchSize:          10,
+			RelevanceThreshold: 0.8,
+			BatchSize:          50,
 		},
 		Digest: DigestConfig{
 			OutputDir: outputDir,

@@ -47,26 +47,28 @@ func buildPrompt(posts []types.Post, interests config.InterestsConfig) string {
 
 	sb.WriteString("You are analyzing social media posts for relevance to a user's interests.\n\n")
 
-	// User interests
-	sb.WriteString("## User Interests\n")
-	hasInterests := len(interests.Keywords) > 0 || len(interests.PriorityAccounts) > 0 ||
-		len(interests.MutedKeywords) > 0 || len(interests.MutedAccounts) > 0
+	// Analysis guidelines
+	sb.WriteString("## Analysis Guidelines\n")
 
-	if !hasInterests {
-		sb.WriteString("No specific interests configured. Score posts based on general quality, informativeness, and newsworthiness.\n")
+	// Custom instructions (or fallback if empty)
+	if interests.CustomInstructions != "" {
+		sb.WriteString(interests.CustomInstructions + "\n")
 	} else {
-		if len(interests.Keywords) > 0 {
-			sb.WriteString(fmt.Sprintf("Keywords: %s\n", strings.Join(interests.Keywords, ", ")))
-		}
-		if len(interests.PriorityAccounts) > 0 {
-			sb.WriteString(fmt.Sprintf("Priority accounts: %s\n", strings.Join(interests.PriorityAccounts, ", ")))
-		}
-		if len(interests.MutedKeywords) > 0 {
-			sb.WriteString(fmt.Sprintf("Muted keywords (score 0): %s\n", strings.Join(interests.MutedKeywords, ", ")))
-		}
-		if len(interests.MutedAccounts) > 0 {
-			sb.WriteString(fmt.Sprintf("Muted accounts (score 0): %s\n", strings.Join(interests.MutedAccounts, ", ")))
-		}
+		sb.WriteString("User specified no particular interests.\n")
+	}
+
+	// Specific interests if configured
+	if len(interests.Keywords) > 0 {
+		sb.WriteString(fmt.Sprintf("Keywords: %s\n", strings.Join(interests.Keywords, ", ")))
+	}
+	if len(interests.PriorityAccounts) > 0 {
+		sb.WriteString(fmt.Sprintf("Priority accounts: %s\n", strings.Join(interests.PriorityAccounts, ", ")))
+	}
+	if len(interests.MutedKeywords) > 0 {
+		sb.WriteString(fmt.Sprintf("Muted keywords (score 0): %s\n", strings.Join(interests.MutedKeywords, ", ")))
+	}
+	if len(interests.MutedAccounts) > 0 {
+		sb.WriteString(fmt.Sprintf("Muted accounts (score 0): %s\n", strings.Join(interests.MutedAccounts, ", ")))
 	}
 
 	sb.WriteString("\n## Posts to Analyze\n\n")
