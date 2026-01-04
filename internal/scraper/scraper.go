@@ -35,22 +35,37 @@ type extractFunc func(ctx context.Context) ([]types.Post, error)
 
 // scrollAndCollectParams configures the scroll-and-collect loop
 type scrollAndCollectParams struct {
-	maxCount          int
-	maxScrollAttempts int
-	extractor         extractFunc
-	logPrefix         string
-	baseDelayMs       int
-	delayIncrementMs  int
+	maxCount         int
+	extractor        extractFunc
+	logPrefix        string
+	baseDelayMs      int
+	delayIncrementMs int
 }
 
-// scrollAndCollect is the common scroll-collect-dedupe loop used by extractPosts and extractReplies
+// scrollAndCollect is the common scroll-collect-dedupe loop used by extractPosts.
+// It scrolls until maxCount posts are collected or the context is cancelled (timeout).
 func (s *Scraper) scrollAndCollect(ctx context.Context, p scrollAndCollectParams) ([]types.Post, error) {
 	var posts []types.Post
 	seenIDs := make(map[string]bool)
 
-	for scrollAttempts := 0; scrollAttempts < p.maxScrollAttempts; scrollAttempts++ {
+	for scrollNum := 1; ; scrollNum++ {
+		// Check if context is done (timeout or cancellation)
+		select {
+		case <-ctx.Done():
+			log.Printf("%s: context done after %d scrolls (collected %d/%d posts): %v",
+				p.logPrefix, scrollNum-1, len(posts), p.maxCount, ctx.Err())
+			return posts, nil // Return what we have, don't error on timeout
+		default:
+		}
+
 		newPosts, err := p.extractor(ctx)
 		if err != nil {
+			// Context cancellation during extraction is normal
+			if ctx.Err() != nil {
+				log.Printf("%s: context done during extraction (collected %d/%d posts)",
+					p.logPrefix, len(posts), p.maxCount)
+				return posts, nil
+			}
 			return nil, err
 		}
 
@@ -67,21 +82,23 @@ func (s *Scraper) scrollAndCollect(ctx context.Context, p scrollAndCollectParams
 			}
 		}
 
-		log.Printf("%s %d/%d: found %d visible, %d new unique (total: %d/%d)",
-			p.logPrefix, scrollAttempts+1, p.maxScrollAttempts,
-			len(newPosts), newUniqueCount, len(posts), p.maxCount)
+		log.Printf("%s %d: found %d visible, %d new unique (total: %d/%d)",
+			p.logPrefix, scrollNum, len(newPosts), newUniqueCount, len(posts), p.maxCount)
 
 		if len(posts) >= p.maxCount {
 			break
 		}
 
 		if err := s.scroll(ctx); err != nil {
+			if ctx.Err() != nil {
+				return posts, nil
+			}
 			return nil, err
 		}
 
 		// Randomized wait for human-like timing
 		jitter := rand.Intn(200)
-		wait := p.baseDelayMs + jitter + scrollAttempts*p.delayIncrementMs
+		wait := p.baseDelayMs + jitter + scrollNum*p.delayIncrementMs
 		time.Sleep(time.Duration(wait) * time.Millisecond)
 	}
 
@@ -101,8 +118,13 @@ func (s *Scraper) ScrapeForYou(ctx context.Context, cookies []*network.Cookie, c
 	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
 	defer browserCancel()
 
-	// Set timeout for the entire scrape operation
-	timedBrowserCtx, timeoutCancel := context.WithTimeout(browserCtx, 5*time.Minute)
+	// Set timeout for the entire scrape operation: 1 second per post, minimum 1 minute
+	timeout := time.Duration(count) * time.Second
+	if timeout < time.Minute {
+		timeout = time.Minute
+	}
+	log.Printf("Scrape timeout: %v", timeout)
+	timedBrowserCtx, timeoutCancel := context.WithTimeout(browserCtx, timeout)
 	defer timeoutCancel()
 
 	// Inject cookies before navigation
@@ -165,12 +187,11 @@ func (s *Scraper) injectCookies(ctx context.Context, cookies []*network.Cookie) 
 // extractPosts scrolls and extracts posts from the feed
 func (s *Scraper) extractPosts(ctx context.Context, count int) ([]types.Post, error) {
 	posts, err := s.scrollAndCollect(ctx, scrollAndCollectParams{
-		maxCount:          count,
-		maxScrollAttempts: count / 5, // Rough estimate: ~5 posts per scroll
-		extractor:         s.extractVisiblePosts,
-		logPrefix:         "Scroll",
-		baseDelayMs:       500,
-		delayIncrementMs:  100,
+		maxCount:         count,
+		extractor:        s.extractVisiblePosts,
+		logPrefix:        "Scroll",
+		baseDelayMs:      500,
+		delayIncrementMs: 100,
 	})
 	if err != nil {
 		return nil, err
@@ -409,207 +430,6 @@ func (s *Scraper) scroll(ctx context.Context) error {
 	return chromedp.Run(ctx,
 		chromedp.Evaluate(`window.scrollBy(0, window.innerHeight)`, nil),
 	)
-}
-
-// ScrapeThread fetches replies for a specific post (for context enrichment)
-func (s *Scraper) ScrapeThread(ctx context.Context, cookies []*network.Cookie, postURL string, replyCount int) ([]types.Post, error) {
-	log.Printf("Starting thread scrape for %d replies: %s", replyCount, postURL)
-
-	// Create browser context with anti-bot-detection options
-	opts := browser.Options(s.headless)
-
-	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
-	defer allocCancel()
-
-	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
-	defer browserCancel()
-
-	// Set timeout for the thread scrape operation
-	browserCtx, timeoutCancel := context.WithTimeout(browserCtx, 2*time.Minute)
-	defer timeoutCancel()
-
-	// Inject cookies before navigation
-	log.Printf("Injecting %d cookies...", len(cookies))
-	if err := s.injectCookies(browserCtx, cookies); err != nil {
-		return nil, fmt.Errorf("failed to inject cookies: %w", err)
-	}
-
-	// Navigate to the post URL
-	log.Printf("Navigating to thread...")
-	if err := chromedp.Run(browserCtx,
-		chromedp.Navigate(postURL),
-		chromedp.WaitVisible(WaitForTweets, chromedp.ByQuery),
-	); err != nil {
-		return nil, fmt.Errorf("failed to load post: %w", err)
-	}
-	log.Printf("Thread loaded, waiting for replies...")
-
-	// Wait a bit for replies to load
-	// TODO: Find a more reliable way to wait for replies to load
-	time.Sleep(2 * time.Second)
-
-	// Extract replies (skip the first tweet which is the main post)
-	replies, err := s.extractReplies(browserCtx, replyCount)
-	if err != nil {
-		return nil, fmt.Errorf("failed to extract replies: %w", err)
-	}
-
-	log.Printf("Thread scrape complete: %d replies collected", len(replies))
-	return replies, nil
-}
-
-// extractReplies extracts reply tweets from a thread page
-func (s *Scraper) extractReplies(ctx context.Context, count int) ([]types.Post, error) {
-	return s.scrollAndCollect(ctx, scrollAndCollectParams{
-		maxCount:          count,
-		maxScrollAttempts: count/3 + 5, // Replies are often fewer per scroll
-		extractor:         s.extractVisibleReplies,
-		logPrefix:         "Reply scroll",
-		baseDelayMs:       800,
-		delayIncrementMs:  150,
-	})
-}
-
-// extractVisibleReplies extracts reply tweets from the current view
-// This skips the main tweet (first article) and gets the replies
-func (s *Scraper) extractVisibleReplies(ctx context.Context) ([]types.Post, error) {
-	var rawPosts []rawPost
-
-	// JavaScript to extract reply tweets (skipping the main tweet)
-	extractJS := `
-		(function() {
-			const tweets = document.querySelectorAll('article[data-testid="tweet"]');
-			const results = [];
-			let skippedFirst = false;
-
-			tweets.forEach(el => {
-				// Skip the first tweet (main post)
-				if (!skippedFirst) {
-					skippedFirst = true;
-					return;
-				}
-
-				try {
-					// Extract tweet ID from status link
-					const statusLink = el.querySelector('a[href*="/status/"]');
-					const id = statusLink?.href?.match(/status\/(\d+)/)?.[1];
-					if (!id) return;
-
-					// Extract author info
-					const userNameEl = el.querySelector('[data-testid="User-Name"]');
-					let authorHandle = '';
-					let authorName = '';
-					if (userNameEl) {
-						const handleLink = userNameEl.querySelector('a[href^="/"]');
-						if (handleLink) {
-							authorHandle = handleLink.getAttribute('href')?.replace('/', '') || '';
-						}
-						const nameSpan = userNameEl.querySelector('span');
-						authorName = nameSpan?.textContent || '';
-					}
-
-					// Extract tweet text
-					const tweetTextEl = el.querySelector('[data-testid="tweetText"]');
-					const content = tweetTextEl?.textContent || '';
-
-					// Extract media URLs
-					const mediaUrls = [];
-					const mediaEls = el.querySelectorAll('[data-testid="tweetPhoto"] img, [data-testid="videoPlayer"] video');
-					mediaEls.forEach(m => {
-						const src = m.src || m.poster;
-						if (src) mediaUrls.push(src);
-					});
-
-					// Extract timestamp
-					const timeEl = el.querySelector('time');
-					const timestamp = timeEl?.getAttribute('datetime') || '';
-
-					// Extract engagement metrics
-					const getMetric = (testId) => {
-						const metricEl = el.querySelector('[data-testid="' + testId + '"]');
-						if (!metricEl) return '0';
-						const ariaLabel = metricEl.getAttribute('aria-label');
-						if (ariaLabel) {
-							const match = ariaLabel.match(/^([\d,.]+[KkMm]?)/);
-							return match ? match[1] : '0';
-						}
-						return metricEl.textContent?.trim() || '0';
-					};
-
-					const replies = getMetric('reply');
-					const retweets = getMetric('retweet');
-					const likes = getMetric('like');
-
-					const originalUrl = statusLink?.href || '';
-
-					results.push({
-						id,
-						authorHandle,
-						authorName,
-						content,
-						mediaUrls,
-						timestamp,
-						likes,
-						retweets,
-						replies,
-						isRetweet: false,
-						isQuoteTweet: false,
-						isReply: true,
-						originalUrl
-					});
-				} catch (e) {
-					console.error('Error extracting reply:', e);
-				}
-			});
-
-			return results;
-		})()
-	`
-
-	err := chromedp.Run(ctx,
-		chromedp.Evaluate(extractJS, &rawPosts),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to extract replies from DOM: %w", err)
-	}
-
-	// Convert raw posts to types.Post
-	posts := make([]types.Post, 0, len(rawPosts))
-	now := time.Now()
-
-	for _, rp := range rawPosts {
-		if rp.ID == "" {
-			continue
-		}
-
-		var timestamp time.Time
-		if rp.Timestamp != "" {
-			if parsed, err := time.Parse(time.RFC3339, rp.Timestamp); err == nil {
-				timestamp = parsed
-			}
-		}
-
-		post := types.Post{
-			ID:           rp.ID,
-			AuthorHandle: rp.AuthorHandle,
-			AuthorName:   rp.AuthorName,
-			Content:      rp.Content,
-			MediaURLs:    rp.MediaURLs,
-			Timestamp:    timestamp,
-			Likes:        parseMetric(rp.Likes),
-			Retweets:     parseMetric(rp.Retweets),
-			Replies:      parseMetric(rp.Replies),
-			QuoteTweets:  0,
-			IsRetweet:    false,
-			IsQuoteTweet: false,
-			IsReply:      true,
-			OriginalURL:  rp.OriginalURL,
-			ScrapedAt:    now,
-		}
-		posts = append(posts, post)
-	}
-
-	return posts, nil
 }
 
 // parseMetric converts abbreviated metric strings like "1.2K", "5.7M", or "423" to integers

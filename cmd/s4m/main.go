@@ -53,7 +53,7 @@ func printUsage() {
 	fmt.Println("  bot-test        Open bot.sannysoft.com to audit browser fingerprint")
 	fmt.Println("  open config     Open config file in default editor")
 	fmt.Println("  open cache      Open cache directory in file explorer")
-	fmt.Println("  analyze         Run steps 2-5 (analyze, filter, context, digest) on cached or specified posts")
+	fmt.Println("  analyze         Run steps 2-4 (analyze, filter, digest) on cached or specified posts")
 	fmt.Println()
 	fmt.Println("Run 's4m <command> -h' for more information on a command.")
 }
@@ -110,17 +110,15 @@ func runOpen(target string) {
 func runAnalyze(args []string) {
 	fs := flag.NewFlagSet("analyze", flag.ExitOnError)
 	filePath := fs.String("file", "", "Path to posts JSON file (default: latest from cache)")
-	skipContext := fs.Bool("skip-context", false, "Skip fetching context/replies (step 4)")
 	noOpen := fs.Bool("no-open", false, "Don't open the digest after generating")
 
 	fs.Usage = func() {
 		fmt.Println("Usage: s4m analyze [options]")
 		fmt.Println()
-		fmt.Println("Run steps 2-5 on cached or specified posts:")
+		fmt.Println("Run steps 2-4 on cached or specified posts:")
 		fmt.Println("  2. Analyze posts with LLM")
 		fmt.Println("  3. Filter by relevance threshold")
-		fmt.Println("  4. Fetch context/replies (unless --skip-context)")
-		fmt.Println("  5. Build and save digest")
+		fmt.Println("  4. Build and save digest")
 		fmt.Println()
 		fmt.Println("Options:")
 		fs.PrintDefaults()
@@ -178,21 +176,8 @@ func runAnalyze(args []string) {
 		return
 	}
 
-	// Step 4: Fetch context (unless skipped)
-	var postsWithContext []types.PostWithAnalysis
-	if *skipContext {
-		log.Println("Skipping context fetch (--skip-context)")
-		postsWithContext = relevantPosts
-	} else {
-		postsWithContext, err = a.FetchContext(ctx, relevantPosts)
-		if err != nil {
-			log.Printf("Failed to fetch context: %v", err)
-			postsWithContext = relevantPosts
-		}
-	}
-
-	// Step 5: Build and save digest
-	digestPath, err := a.BuildDigest(postsWithContext, len(posts))
+	// Step 4: Build and save digest
+	digestPath, err := a.BuildDigest(relevantPosts, len(posts))
 	if err != nil {
 		log.Fatalf("Failed to build digest: %v", err)
 	}

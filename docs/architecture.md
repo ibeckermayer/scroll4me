@@ -39,7 +39,6 @@ scroll4me is a minimal system tray application that scrapes X (Twitter) on deman
 │  │  - Load cookies    │                                                     │
 │  │  - Navigate feed   │                                                     │
 │  │  - Scroll & extract│                                                     │
-│  │  - Fetch replies   │                                                     │
 │  └─────────┬──────────┘                                                     │
 │            │                                                                 │
 │            ▼                                                                 │
@@ -48,7 +47,6 @@ scroll4me is a minimal system tray application that scrapes X (Twitter) on deman
 │  │                    │                                                     │
 │  │  - Score relevance │                                                     │
 │  │  - Extract topics  │                                                     │
-│  │  - Flag for context│                                                     │
 │  └─────────┬──────────┘                                                     │
 │            │                                                                 │
 │            ▼                                                                 │
@@ -56,8 +54,8 @@ scroll4me is a minimal system tray application that scrapes X (Twitter) on deman
 │  │   Digest Builder   │────────▶│   Markdown File    │                     │
 │  │                    │         │   (local disk)     │                     │
 │  │  - Filter by score │         │                    │                     │
-│  │  - Include context │         │  ~/.config/        │                     │
-│  │  - Format markdown │         │  scroll4me/digests/│                     │
+│  │  - Format markdown │         │  ~/.config/        │                     │
+│  │                    │         │  scroll4me/digests/│                     │
 │  └────────────────────┘         └────────────────────┘                     │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -87,9 +85,8 @@ When user clicks "Generate Digest":
 1. **Scrape**: Fetch N posts from X.com For You feed
 2. **Analyze**: Send posts to Claude API for relevance scoring
 3. **Filter**: Keep posts above relevance threshold
-4. **Enrich**: For flagged posts, fetch top replies for context
-5. **Build**: Generate markdown digest with all content
-6. **Save**: Write to `~/.config/scroll4me/digests/YYYY-MM-DD-HHMMSS-digest.md`
+4. **Build**: Generate markdown digest with all content
+5. **Save**: Write to `~/.config/scroll4me/digests/YYYY-MM-DD-HHMMSS-digest.md`
 
 ## Components
 
@@ -117,8 +114,6 @@ Handles X.com authentication via user-driven browser login.
 Extracts posts from X.com using chromedp in headless mode.
 
 **ScrapeForYou**: Scrolls the For You feed and extracts posts.
-
-**ScrapeThread**: Navigates to a specific post URL and extracts replies for context enrichment.
 
 **Post structure**:
 
@@ -152,7 +147,6 @@ Scores posts for relevance using Claude API.
 - `relevance_score` (0.0 to 1.0)
 - `topics` (up to 3 detected topics)
 - `summary` (one sentence)
-- `needs_context` (should we fetch replies?)
 
 Posts are processed in configurable batch sizes to optimize API usage.
 
@@ -165,7 +159,6 @@ Generates markdown files from analyzed posts.
 - Sorts posts by relevance score
 - Limits to configurable max posts
 - Includes post content, summary, topics, engagement metrics
-- Includes notable replies for posts with context
 - Saves to configurable output directory
 
 **Output format**: `YYYY-MM-DD-HHMMSS-digest.md`
@@ -199,7 +192,6 @@ batch_size = 10
 [digest]
 output_dir = "~/.config/scroll4me/digests"
 max_posts = 20
-include_context = true
 ```
 
 ---

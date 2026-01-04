@@ -181,49 +181,8 @@ func (a *App) FilterByRelevance(posts []types.Post, analyses []types.Analysis) [
 	return relevantPosts
 }
 
-// FetchContext performs Step 4: Fetch replies for posts that need context.
-// Logs progress and caches output to step4_context.
-// Returns a new slice with context populated (does not modify the input).
-func (a *App) FetchContext(ctx context.Context, posts []types.PostWithAnalysis) ([]types.PostWithAnalysis, error) {
-	cookies, err := a.authManager.GetCookies()
-	if err != nil {
-		return nil, err
-	}
-
-	s := a.getSnapshot()
-
-	// Create a copy to avoid mutating the input
-	result := make([]types.PostWithAnalysis, len(posts))
-	copy(result, posts)
-
-	if s.config.Digest.IncludeContext {
-		log.Println("Fetching context for relevant posts...")
-		for i := range result {
-			if result[i].Analysis != nil && result[i].Analysis.NeedsContext {
-				log.Printf("Fetching replies for post %s...", result[i].Post.ID)
-				replies, err := s.scraper.ScrapeThread(ctx, cookies, result[i].Post.OriginalURL, 3)
-				if err != nil {
-					log.Printf("Failed to fetch replies for %s: %v", result[i].Post.ID, err)
-					continue
-				}
-				result[i].Context = replies
-				log.Printf("Got %d replies for post %s", len(replies), result[i].Post.ID)
-			}
-		}
-	}
-
-	// Cache output
-	if cachePath, err := store.SaveStepOutput(store.Step4Context, result); err != nil {
-		log.Printf("Failed to cache posts with context: %v", err)
-	} else {
-		log.Printf("Cached posts with context to: %s", cachePath)
-	}
-
-	return result, nil
-}
-
-// BuildDigest performs Step 5: Build and save the digest.
-// Caches the markdown to step5_digests and saves to user output directory.
+// BuildDigest performs Step 4: Build and save the digest.
+// Caches the markdown to step4_digests and saves to user output directory.
 // Returns the path to the saved digest file.
 func (a *App) BuildDigest(posts []types.PostWithAnalysis, totalScraped int) (string, error) {
 	log.Println("Building digest...")
@@ -237,7 +196,7 @@ func (a *App) BuildDigest(posts []types.PostWithAnalysis, totalScraped int) (str
 	}
 
 	// Cache markdown
-	if cachePath, err := store.SaveTextOutput(store.Step5Digests, content.Markdown, ".md"); err != nil {
+	if cachePath, err := store.SaveTextOutput(store.Step4Digests, content.Markdown, ".md"); err != nil {
 		log.Printf("Failed to cache digest: %v", err)
 	} else {
 		log.Printf("Cached digest to: %s", cachePath)
@@ -293,14 +252,7 @@ func (a *App) GenerateDigest() error {
 		return nil
 	}
 
-	// // Step 4: Fetch context for posts that need it
-	// postsWithContext, err := a.FetchContext(ctx, relevantPosts)
-	// if err != nil {
-	// 	log.Printf("Failed to fetch context: %v", err)
-	// 	return err
-	// }
-
-	// Step 5: Build and save digest
+	// Step 4: Build and save digest
 	_, err = a.BuildDigest(relevantPosts, len(posts))
 	if err != nil {
 		log.Printf("Failed to build digest: %v", err)

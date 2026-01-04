@@ -16,7 +16,6 @@ type AnalysisResult struct {
 	RelevanceScore float64  `json:"relevance_score"`
 	Topics         []string `json:"topics"`
 	Summary        string   `json:"summary"`
-	NeedsContext   bool     `json:"needs_context"`
 }
 
 // ParseAnalysisResponse parses raw JSON bytes from an LLM provider into Analysis objects.
@@ -35,7 +34,6 @@ func ParseAnalysisResponse(jsonBytes []byte) ([]types.Analysis, error) {
 			RelevanceScore: r.RelevanceScore,
 			Topics:         r.Topics,
 			Summary:        r.Summary,
-			NeedsContext:   r.NeedsContext,
 			AnalyzedAt:     now,
 		}
 	}
@@ -93,12 +91,11 @@ func buildPrompt(posts []types.Post, interests config.InterestsConfig) string {
 	sb.WriteString("For each post, provide:\n")
 	sb.WriteString("1. relevance_score (0.0 to 1.0): How relevant is this to the user's interests?\n")
 	sb.WriteString("2. topics (array, max 3): Key topics detected\n")
-	sb.WriteString("3. summary (string): One sentence summary\n")
-	sb.WriteString("4. needs_context (boolean): Should we fetch replies for more context?\n\n")
+	sb.WriteString("3. summary (string): One sentence summary\n\n")
 
 	sb.WriteString("IMPORTANT: Respond with ONLY a valid JSON array. No markdown, no code blocks, no explanation - just the raw JSON starting with [ and ending with ].\n\n")
 	sb.WriteString("Example structure:\n")
-	sb.WriteString(`[{"post_id": "...", "relevance_score": 0.85, "topics": ["AI", "tech"], "summary": "Discussion about...", "needs_context": false}]`)
+	sb.WriteString(`[{"post_id": "...", "relevance_score": 0.85, "topics": ["AI", "tech"], "summary": "Discussion about..."}]`)
 	sb.WriteString("\n")
 
 	return sb.String()

@@ -17,8 +17,7 @@ const (
 	Step1Posts    StepName = "step1_posts"
 	Step2Analyses StepName = "step2_analyses"
 	Step3Filtered StepName = "step3_filtered"
-	Step4Context  StepName = "step4_context"
-	Step5Digests  StepName = "step5_digests"
+	Step4Digests  StepName = "step4_digests"
 )
 
 // stepDir returns the cache directory for a given step.

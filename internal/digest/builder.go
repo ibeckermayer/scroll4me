@@ -164,15 +164,6 @@ func (b *Builder) formatPost(num int, p types.PostWithAnalysis) string {
 		sb.WriteString(fmt.Sprintf("🔗 [View on X](%s)\n\n", p.Post.OriginalURL))
 	}
 
-	// Context (replies) if available
-	if len(p.Context) > 0 {
-		sb.WriteString("### Notable Replies\n\n")
-		for _, reply := range p.Context {
-			sb.WriteString(fmt.Sprintf("**@%s:**\n", reply.AuthorHandle))
-			sb.WriteString(fmt.Sprintf("> %s\n\n", formatQuote(reply.Content)))
-		}
-	}
-
 	return sb.String()
 }
 

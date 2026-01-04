@@ -39,9 +39,8 @@ type AnalysisConfig struct {
 }
 
 type DigestConfig struct {
-	OutputDir      string `toml:"output_dir"`
-	MaxPosts       int    `toml:"max_posts"`
-	IncludeContext bool   `toml:"include_context"`
+	OutputDir string `toml:"output_dir"`
+	MaxPosts  int    `toml:"max_posts"`
 }
 
 // LLM Provider constants
@@ -74,9 +73,8 @@ func Default() *Config {
 			BatchSize:          10,
 		},
 		Digest: DigestConfig{
-			OutputDir:      outputDir,
-			MaxPosts:       20,
-			IncludeContext: true,
+			OutputDir: outputDir,
+			MaxPosts:  20,
 		},
 	}
 }

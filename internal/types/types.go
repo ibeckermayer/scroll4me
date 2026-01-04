@@ -27,13 +27,11 @@ type Analysis struct {
 	RelevanceScore float64   `json:"relevance_score"`
 	Topics         []string  `json:"topics"`
 	Summary        string    `json:"summary"`
-	NeedsContext   bool      `json:"needs_context"`
 	AnalyzedAt     time.Time `json:"analyzed_at"`
 }
 
-// PostWithAnalysis combines a post with its analysis and optional context
+// PostWithAnalysis combines a post with its analysis
 type PostWithAnalysis struct {
 	Post     Post
 	Analysis *Analysis
-	Context  []Post // Replies/thread context if fetched
 }
