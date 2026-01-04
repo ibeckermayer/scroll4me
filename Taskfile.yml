@@ -11,7 +11,7 @@ tasks:
       - go build -o {{.BIN_DIR}}/{{.APP_NAME}} .
 
   run:
-    desc: Run the application
+    desc: Run the application (tray mode)
     cmds:
       - go run .
 
@@ -19,8 +19,3 @@ tasks:
     desc: Clean build artifacts
     cmds:
       - rm -rf {{.BIN_DIR}}
-
-  s4m:
-    desc: Run dev CLI with any arguments (e.g., task s4m -- bot-test)
-    cmds:
-      - go run ./cmd/s4m {{.CLI_ARGS}}
