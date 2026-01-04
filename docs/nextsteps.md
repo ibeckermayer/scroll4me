@@ -3,3 +3,6 @@
 - Get rid of the going into replies feature for now, needs more thorough thought on how to do it properly
 - Get rid of most of the feed selectors in selectors.go. Create raw .js files that we load so we can just define consts in JS and get a more normal dev experience.
 - Handle quote tweets better: currently we skip "Show more" on quote tweets because clicking them navigates to the quoted tweet's page. Should follow those links to get full quoted content for the digest. Note: this causes navigation away from feed, so either open in a new tab or remember to navigate back afterwards.
+- Currently we're just using Relevance Score as a filter, which doesn't seem great. The LLM ends up just scoring a lot as "relevant"; what we really want is a way to get it to be more discriminating about what is high quality and what is not. Possibly we also want to consider passing the whole digest back into the LLM and have it edit it to remove redundant or low quality posts that made it through the first pass.
+- cookies are stored unencrypted on disk right now, as is config (which contains api keys). We should encrypt them at rest.
+- Add a feature that let's the LLM select something outside of your interests to help you discover new things.

@@ -11,9 +11,9 @@ tasks:
       - go build -o {{.BIN_DIR}}/{{.APP_NAME}} .
 
   run:
-    desc: Run the application (tray mode)
+    desc: Run the application (e.g., task run -- --help)
     cmds:
-      - go run .
+      - go run . {{.CLI_ARGS}}
 
   clean:
     desc: Clean build artifacts
