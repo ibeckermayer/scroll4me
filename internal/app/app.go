@@ -293,15 +293,15 @@ func (a *App) GenerateDigest() error {
 		return nil
 	}
 
-	// Step 4: Fetch context for posts that need it
-	postsWithContext, err := a.FetchContext(ctx, relevantPosts)
-	if err != nil {
-		log.Printf("Failed to fetch context: %v", err)
-		return err
-	}
+	// // Step 4: Fetch context for posts that need it
+	// postsWithContext, err := a.FetchContext(ctx, relevantPosts)
+	// if err != nil {
+	// 	log.Printf("Failed to fetch context: %v", err)
+	// 	return err
+	// }
 
 	// Step 5: Build and save digest
-	_, err = a.BuildDigest(postsWithContext, len(posts))
+	_, err = a.BuildDigest(relevantPosts, len(posts))
 	if err != nil {
 		log.Printf("Failed to build digest: %v", err)
 		return err

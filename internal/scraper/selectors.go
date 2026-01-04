@@ -10,21 +10,22 @@ const (
 	TweetArticle  = `article[data-testid="tweet"]`
 
 	// Tweet content selectors
-	TweetText       = `[data-testid="tweetText"]`
-	TweetAuthor     = `[data-testid="User-Name"]`
-	TweetTimestamp  = `time`
-	TweetLink       = `a[href*="/status/"]`
-	TweetMedia      = `[data-testid="tweetPhoto"], [data-testid="videoPlayer"]`
+	TweetText      = `[data-testid="tweetText"]`
+	TweetShowMore  = `button[data-testid="tweet-text-show-more-link"]`
+	TweetAuthor    = `[data-testid="User-Name"]`
+	TweetTimestamp = `time`
+	TweetLink      = `a[href*="/status/"]`
+	TweetMedia     = `[data-testid="tweetPhoto"], [data-testid="videoPlayer"]`
 
 	// Engagement selectors
-	ReplyCount    = `[data-testid="reply"]`
-	RetweetCount  = `[data-testid="retweet"]`
-	LikeCount     = `[data-testid="like"]`
+	ReplyCount   = `[data-testid="reply"]`
+	RetweetCount = `[data-testid="retweet"]`
+	LikeCount    = `[data-testid="like"]`
 
 	// Tweet type indicators
-	RetweetIndicator  = `[data-testid="socialContext"]`
-	QuoteIndicator    = `[data-testid="quoteTweet"]`
-	ReplyIndicator    = `[data-testid="tweet"] a[href*="/status/"][dir="ltr"]`
+	RetweetIndicator = `[data-testid="socialContext"]`
+	QuoteIndicator   = `[data-testid="quoteTweet"]`
+	ReplyIndicator   = `[data-testid="tweet"] a[href*="/status/"][dir="ltr"]`
 
 	// Login page indicators (for detecting auth state)
 	HomeIndicator = `[data-testid="SideNav_NewTweet_Button"]`
@@ -33,6 +34,5 @@ const (
 
 // Common wait conditions
 const (
-	WaitForFeed   = FeedContainer
 	WaitForTweets = TweetArticle
 )

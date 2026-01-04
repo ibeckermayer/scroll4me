@@ -1,0 +1,5 @@
+- When a user clicks generate digest from the menu the app should pop open directly to the digest file
+- We want a way to inject arbitrary prompts to the LLM besides keywords and priority accounts so that the user can instruct the LLM on what to focus on with richer instructions
+- Get rid of the going into replies feature for now, needs more thorough thought on how to do it properly
+- Get rid of most of the feed selectors in selectors.go. Create raw .js files that we load so we can just define consts in JS and get a more normal dev experience.
+- Handle quote tweets better: currently we skip "Show more" on quote tweets because clicking them navigates to the quoted tweet's page. Should follow those links to get full quoted content for the digest. Note: this causes navigation away from feed, so either open in a new tab or remember to navigate back afterwards.

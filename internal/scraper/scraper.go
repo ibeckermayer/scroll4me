@@ -197,8 +197,63 @@ type rawPost struct {
 	OriginalURL  string   `json:"originalUrl"`
 }
 
+// expandTruncatedTweets clicks "Show more" buttons on visible tweets to reveal full content.
+// Uses variable delays (250ms-1000ms) between clicks to appear more human-like.
+func (s *Scraper) expandTruncatedTweets(ctx context.Context) error {
+	// Find all "Show more" buttons currently visible
+	var buttonCount int
+	countJS := fmt.Sprintf(`document.querySelectorAll('%s').length`, TweetShowMore)
+
+	if err := chromedp.Run(ctx, chromedp.Evaluate(countJS, &buttonCount)); err != nil {
+		return fmt.Errorf("failed to count show more buttons: %w", err)
+	}
+
+	if buttonCount == 0 {
+		return nil
+	}
+
+	log.Printf("Expanding %d truncated tweets...", buttonCount)
+
+	// Click each button with a variable delay
+	for i := 0; i < buttonCount; i++ {
+		// Click the first visible "Show more" button (they disappear after clicking)
+		clickJS := fmt.Sprintf(`
+			(function() {
+				const btn = document.querySelector('%s');
+				if (btn) {
+					btn.click();
+					return true;
+				}
+				return false;
+			})()
+		`, TweetShowMore)
+
+		var clicked bool
+		if err := chromedp.Run(ctx, chromedp.Evaluate(clickJS, &clicked)); err != nil {
+			log.Printf("Failed to click show more button %d: %v", i, err)
+			continue
+		}
+
+		if !clicked {
+			break // No more buttons found
+		}
+
+		// Variable delay: 250ms to 500ms
+		delay := time.Duration(250+rand.Intn(250)) * time.Millisecond
+		time.Sleep(delay)
+	}
+
+	return nil
+}
+
 // extractVisiblePosts parses currently visible tweets
 func (s *Scraper) extractVisiblePosts(ctx context.Context) ([]types.Post, error) {
+	// First, expand any truncated tweets to get full content
+	if err := s.expandTruncatedTweets(ctx); err != nil {
+		log.Printf("Warning: failed to expand truncated tweets: %v", err)
+		// Continue anyway - we'll get partial content
+	}
+
 	var rawPosts []rawPost
 
 	// JavaScript to extract tweet data from the DOM
