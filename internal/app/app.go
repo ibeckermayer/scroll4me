@@ -253,10 +253,16 @@ func (a *App) GenerateDigest() error {
 	}
 
 	// Step 4: Build and save digest
-	_, err = a.BuildDigest(relevantPosts, len(posts))
+	digestPath, err := a.BuildDigest(relevantPosts, len(posts))
 	if err != nil {
 		log.Printf("Failed to build digest: %v", err)
 		return err
+	}
+
+	// Step 5: Open the digest in the default text editor
+	if err := browser.OpenFile(digestPath); err != nil {
+		log.Printf("Failed to open digest: %v", err)
+		// Don't return error - digest was built successfully
 	}
 
 	return nil

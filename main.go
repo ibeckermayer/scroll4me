@@ -43,8 +43,14 @@ func main() {
 		runOpen(os.Args[2])
 	case "analyze":
 		runAnalyze(os.Args[2:])
-	case "clear-cache":
-		runClearCache()
+	case "clear":
+		if len(os.Args) < 3 {
+			fmt.Println("Usage: scroll4me clear <cache|cookies>")
+			os.Exit(1)
+		}
+		runClear(os.Args[2])
+	case "logout":
+		runClearCookies()
 	case "-h", "--help", "help":
 		printUsage()
 	default:
@@ -66,7 +72,9 @@ func printUsage() {
 	fmt.Println("  open config     Open config file in default editor")
 	fmt.Println("  open cache      Open cache directory in file explorer")
 	fmt.Println("  analyze         Run analysis pipeline on cached posts")
-	fmt.Println("  clear-cache     Clear all cached data")
+	fmt.Println("  clear cache     Clear all cached data")
+	fmt.Println("  clear cookies   Clear stored cookies (logout)")
+	fmt.Println("  logout          Alias for 'clear cookies'")
 	fmt.Println("  help            Show this help message")
 }
 
@@ -278,6 +286,19 @@ func initApp() (*app.App, error) {
 	return app.New(cfg, authManager, postScraper, postAnalyzer), nil
 }
 
+func runClear(target string) {
+	switch target {
+	case "cache":
+		runClearCache()
+	case "cookies":
+		runClearCookies()
+	default:
+		fmt.Printf("Unknown target: %s\n", target)
+		fmt.Println("Usage: scroll4me clear <cache|cookies>")
+		os.Exit(1)
+	}
+}
+
 func runClearCache() {
 	cacheDir, err := config.CacheDir()
 	if err != nil {
@@ -294,4 +315,21 @@ func runClearCache() {
 		log.Fatalf("Failed to clear cache: %v", err)
 	}
 	log.Println("Cache cleared successfully")
+}
+
+func runClearCookies() {
+	cookiePath, err := auth.DefaultCookieStorePath()
+	if err != nil {
+		log.Fatalf("Failed to get cookie path: %v", err)
+	}
+
+	if _, err := os.Stat(cookiePath); os.IsNotExist(err) {
+		log.Println("No cookies stored - nothing to clear")
+		return
+	}
+
+	if err := os.Remove(cookiePath); err != nil {
+		log.Fatalf("Failed to clear cookies: %v", err)
+	}
+	log.Println("Cookies cleared successfully (logged out)")
 }
