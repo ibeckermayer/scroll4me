@@ -5,3 +5,4 @@
 - cookies are stored unencrypted on disk right now, as is config (which contains api keys). We should encrypt them at rest.
 - Add a feature that let's the LLM select something outside of your interests to help you discover new things.
 - Capture logs and errors to a file so we can debug issues.
+- hot reload config

@@ -39,7 +39,7 @@ type scrollAndCollectParams struct {
 	extractor        extractFunc
 	logPrefix        string
 	baseDelayMs      int
-	delayIncrementMs int
+	delayJitterMaxMs int
 }
 
 // scrollAndCollect is the common scroll-collect-dedupe loop used by extractPosts.
@@ -97,8 +97,8 @@ func (s *Scraper) scrollAndCollect(ctx context.Context, p scrollAndCollectParams
 		}
 
 		// Randomized wait for human-like timing
-		jitter := rand.Intn(200)
-		wait := p.baseDelayMs + jitter + scrollNum*p.delayIncrementMs
+		jitter := rand.Intn(p.delayJitterMaxMs)
+		wait := p.baseDelayMs + jitter
 		time.Sleep(time.Duration(wait) * time.Millisecond)
 	}
 
@@ -191,7 +191,7 @@ func (s *Scraper) extractPosts(ctx context.Context, count int) ([]types.Post, er
 		extractor:        s.extractVisiblePosts,
 		logPrefix:        "Scroll",
 		baseDelayMs:      500,
-		delayIncrementMs: 100,
+		delayJitterMaxMs: 300,
 	})
 	if err != nil {
 		return nil, err
@@ -428,7 +428,7 @@ func (s *Scraper) extractVisiblePosts(ctx context.Context) ([]types.Post, error)
 // scroll scrolls the page down
 func (s *Scraper) scroll(ctx context.Context) error {
 	return chromedp.Run(ctx,
-		chromedp.Evaluate(`window.scrollBy(0, window.innerHeight)`, nil),
+		chromedp.Evaluate(`window.scrollBy(0, window.innerHeight * 2)`, nil),
 	)
 }
 
