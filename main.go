@@ -117,7 +117,7 @@ func stepAnalyzeCmd() *ffcli.Command {
 		ShortHelp:  "Step 2: Analyze posts with LLM",
 		FlagSet:    fs,
 		Exec: func(ctx context.Context, args []string) error {
-			posts, _, err := loadPosts(*file)
+			posts, err := loadPosts(*file)
 			if err != nil {
 				return err
 			}
@@ -146,7 +146,7 @@ func stepFilterCmd() *ffcli.Command {
 		ShortHelp:  "Step 3: Filter posts by relevance threshold",
 		FlagSet:    fs,
 		Exec: func(ctx context.Context, args []string) error {
-			posts, _, err := loadPosts(*postsFile)
+			posts, err := loadPosts(*postsFile)
 			if err != nil {
 				return fmt.Errorf("failed to load posts: %w", err)
 			}
@@ -313,14 +313,16 @@ func botTestCmd() *ffcli.Command {
 
 // loadPosts loads posts from file or latest cache.
 // Returns posts, the path they were loaded from, and any error.
-func loadPosts(file string) ([]types.Post, string, error) {
+func loadPosts(file string) ([]types.Post, error) {
 	if file != "" {
 		log.Printf("Loading posts from: %s", file)
 		posts, err := store.LoadStepOutput[[]types.Post](file)
-		return posts, file, err
+		return posts, err
 	}
 	log.Println("Loading latest posts from cache...")
-	return store.LoadLatestStepOutput[[]types.Post](store.Step1Posts)
+	posts, path, err := store.LoadLatestStepOutput[[]types.Post](store.Step1Posts)
+	log.Printf("Loaded posts from: %s", path)
+	return posts, err
 }
 
 // loadAnalyses loads analyses from file or latest cache.
@@ -330,7 +332,8 @@ func loadAnalyses(file string) ([]types.Analysis, error) {
 		return store.LoadStepOutput[[]types.Analysis](file)
 	}
 	log.Println("Loading latest analyses from cache...")
-	analyses, _, err := store.LoadLatestStepOutput[[]types.Analysis](store.Step2Analyses)
+	analyses, path, err := store.LoadLatestStepOutput[[]types.Analysis](store.Step2Analyses)
+	log.Printf("Loaded analyses from: %s", path)
 	return analyses, err
 }
 
@@ -344,7 +347,8 @@ func loadFiltered(file string) ([]types.PostWithAnalysis, int, error) {
 		return filtered, len(filtered), err
 	}
 	log.Println("Loading latest filtered posts from cache...")
-	filtered, _, err := store.LoadLatestStepOutput[[]types.PostWithAnalysis](store.Step3Filtered)
+	filtered, path, err := store.LoadLatestStepOutput[[]types.PostWithAnalysis](store.Step3Filtered)
+	log.Printf("Loaded filtered posts from: %s", path)
 	if err != nil {
 		return nil, 0, err
 	}
