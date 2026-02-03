@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/ibeckermayer/scroll4me/internal/analyzer/providers"
 	"github.com/ibeckermayer/scroll4me/internal/config"
 	"github.com/ibeckermayer/scroll4me/internal/types"
@@ -47,19 +49,40 @@ func (a *Analyzer) AnalyzePosts(ctx context.Context, posts []types.Post) ([]type
 		return nil, nil
 	}
 
-	var allAnalyses []types.Analysis
+	// Calculate number of batches
+	numBatches := (len(posts) + a.batchSize - 1) / a.batchSize
 
-	// Process in batches
+	// Pre-allocate results slice (one slice per batch)
+	results := make([][]types.Analysis, numBatches)
+
+	g, ctx := errgroup.WithContext(ctx)
+
+	// Process batches concurrently
 	for i := 0; i < len(posts); i += a.batchSize {
+		batchIdx := i / a.batchSize
+		start := i
 		end := min(i+a.batchSize, len(posts))
+		batch := posts[start:end]
 
-		batch := posts[i:end]
-		analyses, err := a.provider.Analyze(ctx, batch, a.interests)
-		if err != nil {
-			return nil, fmt.Errorf("failed to analyze batch %d: %w", i/a.batchSize, err)
-		}
+		g.Go(func() error {
+			analyses, err := a.provider.Analyze(ctx, batch, a.interests)
+			if err != nil {
+				return fmt.Errorf("failed to analyze batch %d: %w", batchIdx, err)
+			}
+			results[batchIdx] = analyses
+			return nil
+		})
+	}
 
-		allAnalyses = append(allAnalyses, analyses...)
+	// Wait for all goroutines and check for errors
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	// Flatten results in order
+	var allAnalyses []types.Analysis
+	for _, batchResult := range results {
+		allAnalyses = append(allAnalyses, batchResult...)
 	}
 
 	return allAnalyses, nil
